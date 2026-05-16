@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = ["crates/pty", "crates/perga-cli"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+publish = false
+
+[workspace.dependencies]
+portable-pty = "0.8"
+crossbeam-channel = "0.5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+nix = { version = "0.29", features = ["term", "signal"] }
+signal-hook = "0.3"
+libc = "0.2"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+dbg_macro = "deny"
+todo = "deny"
