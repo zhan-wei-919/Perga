@@ -103,13 +103,13 @@ fn parse_mode() -> Result<CliMode, String> {
         "raw-debug" | "raw_debug" | "in_debug" => Ok(CliMode::RawDebug),
         "-h" | "--help" | "help" => Ok(CliMode::Help),
         other => Err(format!(
-            "unknown mode {other:?}; use `raw-debug` for escaped PTY byte chunks"
+            "unknown mode {other:?}; use `raw-debug` for encoded protocol JSON"
         )),
     }
 }
 
 fn print_usage() {
-    eprintln!("usage:\n  cargo run\n  cargo run -- raw-debug\n\naliases: raw_debug, in_debug");
+    eprintln!("usage:\n  cargo run\n  cargo run -- raw-debug");
 }
 
 /// stdin 阻塞 read + wake_rx 的非阻塞解锁,二选一。

@@ -49,6 +49,19 @@ impl Cell {
         }
         s
     }
+
+    /// 是不是「terminal 刚初始化时」的默认空白 cell。
+    ///
+    /// = ch=' ', combining 空, width=Single, fg=Foreground, bg=Background, attrs 空。
+    /// Protocol Encoder 用这个判定做空白游程压缩。
+    pub fn is_default_blank(&self) -> bool {
+        self.ch == ' '
+            && self.combining.is_empty()
+            && self.width == CellWidth::Single
+            && matches!(self.fg, Color::Named(NamedColor::Foreground))
+            && matches!(self.bg, Color::Named(NamedColor::Background))
+            && self.attrs.is_empty()
+    }
 }
 
 /// 终端 cell 的宽度语义。

@@ -13,9 +13,20 @@
 //!   damage API,Engine 边界保持纯净。
 //! - Encoder 不做 IO,只产 events。序列化(serde_json / MessagePack / 其他)
 //!   和 emit(Tauri / WebSocket / 其他)都是上层的事。
+//!
+//! # Wire format 契约(前端必须遵守)
+//!
+//! Grid 内容用行内 RLE 压缩(见 [`RowEntry`]):
+//! - `Blank { count }`:连续 `count` 个默认空白 cell ── ch=' ', 默认色, 无 attrs。
+//! - `Text { s, fg?, bg?, attrs? }`:共享属性的单宽字符串。**缺 fg / bg / attrs
+//!   字段时按默认值解读**(fg=Foreground, bg=Background, attrs 空)。
+//! - `Cells { cells }`:兜底数组 ── wide char + spacer 对、带 combining mark
+//!   的 cell;前端按 cell 数组逐列覆盖。
+//!
+//! 一行的所有 entry 顺序展开后,占用列数之和 = `size.cols`。
 
 mod encoder;
 mod event;
 
 pub use encoder::ProtocolEncoder;
-pub use event::{DirtyRow, ExitStatus, ProtocolEvent, TitleChange};
+pub use event::{DirtyRow, ExitStatus, ProtocolEvent, RowEntry, TitleChange};

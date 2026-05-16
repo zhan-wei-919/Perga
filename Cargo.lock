@@ -325,7 +325,10 @@ dependencies = [
  "crossbeam-channel",
  "nix 0.29.0",
  "pty",
+ "serde_json",
  "signal-hook",
+ "terminal-engine",
+ "terminal-protocol",
  "tracing",
  "tracing-subscriber",
 ]

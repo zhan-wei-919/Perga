@@ -10,7 +10,10 @@ path = "src/main.rs"
 
 [dependencies]
 pty = { path = "../pty" }
+terminal-engine = { path = "../terminal-engine" }
+terminal-protocol = { path = "../terminal-protocol" }
 crossbeam-channel.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 nix = { workspace = true, features = ["term", "signal", "fs", "poll"] }

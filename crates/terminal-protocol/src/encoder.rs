@@ -4,12 +4,16 @@
 //! rows / modes / title,决定走 `Init`(首帧 / resize)还是 `Patch`(行级
 //! 增量)。
 //!
+//! Grid 内容在产出 wire event 时通过 [`encode_row`] 做行内 RLE 压缩 ──
+//! Encoder 内部 cache 仍是未压缩的 `Vec<Row>`,行级 diff 按 cell vector 直接
+//! 比较,简单可靠;只有产出 entry 时才走压缩路径。
+//!
 //! Encoder **不**做任何 IO ── 既不 emit、也不 JSON.stringify。调用方拿到
 //! `ProtocolEvent` 自己决定怎么序列化、往哪发。
 
-use terminal_engine::{Row, Snapshot, TerminalModes, TerminalSize};
+use terminal_engine::{Cell, CellWidth, Row, Snapshot, TerminalModes, TerminalSize};
 
-use crate::event::{DirtyRow, ExitStatus, ProtocolEvent, TitleChange};
+use crate::event::{DirtyRow, ExitStatus, ProtocolEvent, RowEntry, TitleChange};
 
 pub struct ProtocolEncoder {
     /// 单调递增,从 1 开始。0 是「尚未发任何事件」的哨兵。
@@ -65,9 +69,11 @@ impl ProtocolEncoder {
             }
             _ => {
                 // None 或 size mismatch ── 都走 Init,重置缓存。
+                let encoded_rows: Vec<Vec<RowEntry>> =
+                    snapshot.rows.iter().map(|r| encode_row(&r.cells)).collect();
                 self.last = Some(LastFrame {
                     size: snapshot.size,
-                    rows: snapshot.rows.clone(),
+                    rows: snapshot.rows,
                     modes,
                     title: title.clone(),
                 });
@@ -75,7 +81,7 @@ impl ProtocolEncoder {
                     seq: self.seq,
                     size: snapshot.size,
                     cursor: snapshot.cursor,
-                    rows: snapshot.rows,
+                    rows: encoded_rows,
                     modes,
                     title,
                 }
@@ -99,7 +105,8 @@ impl Default for ProtocolEncoder {
     }
 }
 
-/// 行级 diff。Cell 已经 `PartialEq`,整行 `Vec<Cell>` 直接比较。
+/// 行级 diff。Cell 已经 `PartialEq`,整行 `Vec<Cell>` 直接比较。脏行通过
+/// [`encode_row`] 转成 `Vec<RowEntry>`。
 ///
 /// `old` 长度短于 `new` 理论上不会发生(size 不一致已经走 Init 路径),但稳
 /// 一手:`old.get(i)` 拿不到就视为整行脏。
@@ -113,10 +120,73 @@ fn diff_rows(old: &[Row], new: &[Row]) -> Vec<DirtyRow> {
             };
             dirty.then(|| DirtyRow {
                 index: i as u16,
-                cells: row.cells.clone(),
+                entries: encode_row(&row.cells),
             })
         })
         .collect()
+}
+
+/// 把一行 cells 编成 `RowEntry` 序列。O(n) 单次扫描,三种 entry:
+/// - **Blank**:连续默认空白 cell。
+/// - **Text**:连续单宽、共享属性、无 combining 的 cell,压成字符串。
+/// - **Cells**:wide char + spacer、或带 combining mark 的 cell。
+fn encode_row(cells: &[Cell]) -> Vec<RowEntry> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < cells.len() {
+        let cell = &cells[i];
+
+        if cell.is_default_blank() {
+            let start = i;
+            while i < cells.len() && cells[i].is_default_blank() {
+                i += 1;
+            }
+            out.push(RowEntry::Blank {
+                count: (i - start) as u16,
+            });
+            continue;
+        }
+
+        if cell.width == CellWidth::Single && cell.combining.is_empty() {
+            // 文本 run:共享 fg/bg/attrs。
+            let (fg, bg, attrs) = (cell.fg, cell.bg, cell.attrs);
+            let mut s = String::new();
+            while i < cells.len() {
+                let c = &cells[i];
+                if c.is_default_blank()
+                    || c.width != CellWidth::Single
+                    || !c.combining.is_empty()
+                    || c.fg != fg
+                    || c.bg != bg
+                    || c.attrs != attrs
+                {
+                    break;
+                }
+                s.push(c.ch);
+                i += 1;
+            }
+            out.push(RowEntry::Text { s, fg, bg, attrs });
+            continue;
+        }
+
+        // Cells 兜底:wide / spacer / combining。
+        let start = i;
+        while i < cells.len() {
+            let c = &cells[i];
+            if c.is_default_blank() {
+                break;
+            }
+            // 单宽且无 combining 的 cell 应该让 Text run 接管,跳出。
+            if c.width == CellWidth::Single && c.combining.is_empty() {
+                break;
+            }
+            i += 1;
+        }
+        out.push(RowEntry::Cells {
+            cells: cells[start..i].to_vec(),
+        });
+    }
+    out
 }
 
 /// title 变化检测。`None → Some` 是 Set,`Some → None` 是 Reset,

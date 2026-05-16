@@ -1,8 +1,10 @@
 //! 协议事件类型。`ProtocolEvent` 是协议表面的全部 ── 三类事件:
 //! `Init` / `Patch` / `Exited`。
+//!
+//! Grid 内容用 [`RowEntry`] 做行内 RLE 压缩,见类型文档。
 
 use serde::Serialize;
-use terminal_engine::{Cell, Cursor, Row, TerminalModes, TerminalSize};
+use terminal_engine::{Cell, CellAttrs, Color, Cursor, NamedColor, TerminalModes, TerminalSize};
 
 /// 协议事件。`tag = "type"` 模式,前端按 `msg.type` switch。
 ///
@@ -13,11 +15,14 @@ use terminal_engine::{Cell, Cursor, Row, TerminalModes, TerminalSize};
 pub enum ProtocolEvent {
     /// 完整帧。Encoder 第一次调用 / engine resize 后发。前端拿到后**必须**
     /// 清空本地 grid,用这一帧重建。
+    ///
+    /// `rows.len() == size.rows`,行号 = 数组索引(positional)。每一行是一个
+    /// `Vec<RowEntry>`,entries 顺序展开后必须正好填满 `size.cols` 列。
     Init {
         seq: u64,
         size: TerminalSize,
         cursor: Cursor,
-        rows: Vec<Row>,
+        rows: Vec<Vec<RowEntry>>,
         modes: TerminalModes,
         title: Option<String>,
     },
@@ -38,12 +43,48 @@ pub enum ProtocolEvent {
 
 /// Patch 里的脏行 ── 整行替换语义,前端按 `index` 整行覆盖。
 ///
-/// 第一刀**不**做列范围 patch:Cell-level 替换在 JS 端并不比整行更快,而协议
-/// 形状会多一个维度。真要做再加 `left/right` 字段。
+/// `entries` 顺序展开后必须覆盖整行(`size.cols` 列)。
 #[derive(Debug, Clone, Serialize)]
 pub struct DirtyRow {
     pub index: u16,
-    pub cells: Vec<Cell>,
+    pub entries: Vec<RowEntry>,
+}
+
+/// 行内 entry。row 内做混合 RLE:空白游程、共享属性的文本游程、兜底 cells 数组。
+///
+/// `tag = "type"` 与 [`ProtocolEvent`] 一致,前端 switch 走分支。
+///
+/// **协议契约**:
+/// - 一行内所有 entry 的「占用列数」之和 = `size.cols`。
+/// - `Text.s` 中每个 char 占一列(单宽)。
+/// - `Cells.cells` 中每个 `Cell` 占一列 ── wide char 在网格里占两列,所以
+///   `Cells` 数组里 `Wide` cell **总是**紧跟一个 `WideSpacer` cell。
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RowEntry {
+    /// 连续 `count` 个 [`Cell::is_default_blank`] 为 true 的 cell。
+    /// 默认空白 = ch=' ', combining 空, width=Single, fg=Foreground,
+    /// bg=Background, attrs 空。
+    Blank { count: u16 },
+
+    /// 共享属性的单宽字符串。`s.chars().count()` = 这段占用的列数。
+    /// **不**含 combining mark / wide char ── 那两种走 [`RowEntry::Cells`]。
+    ///
+    /// `fg` / `bg` / `attrs` 是默认值时通过 `skip_serializing_if` 隐去,前端
+    /// 缺这个 key 时就当默认(Foreground / Background / empty attrs)。
+    Text {
+        s: String,
+        #[serde(skip_serializing_if = "is_default_fg")]
+        fg: Color,
+        #[serde(skip_serializing_if = "is_default_bg")]
+        bg: Color,
+        #[serde(skip_serializing_if = "CellAttrs::is_empty")]
+        attrs: CellAttrs,
+    },
+
+    /// 兜底:wide char + spacer 对、带 combining mark 的 cell。前端按 cells
+    /// 数组逐 cell 覆盖对应列。
+    Cells { cells: Vec<Cell> },
 }
 
 /// 标题变更类型。`Set` 来自 OSC 0/2,`Reset` 来自 alacritty 的 `ResetTitle`
@@ -65,4 +106,12 @@ pub enum TitleChange {
 pub struct ExitStatus {
     pub code: Option<i32>,
     pub signal: Option<i32>,
+}
+
+fn is_default_fg(c: &Color) -> bool {
+    matches!(c, Color::Named(NamedColor::Foreground))
+}
+
+fn is_default_bg(c: &Color) -> bool {
+    matches!(c, Color::Named(NamedColor::Background))
 }
