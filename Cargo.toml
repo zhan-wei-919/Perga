@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/pty", "crates/perga-cli"]
+members = ["crates/pty", "crates/terminal-engine", "crates/perga-cli"]
 
 [workspace.package]
 edition = "2021"
@@ -16,6 +16,11 @@ thiserror = "2"
 nix = { version = "0.29", features = ["term", "signal"] }
 signal-hook = "0.3"
 libc = "0.2"
+alacritty_terminal = { version = "0.25", default-features = false }
+vte = "0.15"
+bitflags = "2"
+parking_lot = "0.12"
+unicode-width = "0.2"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"
