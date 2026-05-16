@@ -4,6 +4,7 @@
 //! 这一层**不解析**任何终端协议 —— 宿主终端自己会把 PTY 输出渲染出来,
 //! 这正好就是「PTY 层不转译」设计意图的现场演示。
 
+mod raw_debug;
 mod raw_mode;
 
 use std::io::{self, Write};
@@ -23,8 +24,17 @@ use crate::raw_mode::RawModeGuard;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_tracing();
 
+    let mode = parse_mode().map_err(|msg| io::Error::new(io::ErrorKind::InvalidInput, msg))?;
+    if mode == CliMode::Help {
+        print_usage();
+        return Ok(());
+    }
+
     let stdout_fd = io::stdout().as_raw_fd();
     let size = term_size_from_fd(stdout_fd).unwrap_or(PtySize::new(24, 80));
+    if mode == CliMode::RawDebug {
+        return raw_debug::run(size);
+    }
 
     // Raw mode 先于 spawn 子进程:stdin 不是 tty 时直接 fail-fast,
     // 而不是先把 shell 拉起来再回头清理。RAII guard 自身 Drop 会还原 termios。
@@ -72,6 +82,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // shell 提示和 PTY 残留输出黏在一起。
     let _ = io::stderr().write_all(b"\r\n[perga] bye.\r\n");
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CliMode {
+    PtyDemo,
+    RawDebug,
+    Help,
+}
+
+fn parse_mode() -> Result<CliMode, String> {
+    let mut args = std::env::args().skip(1);
+    let Some(mode) = args.next() else {
+        return Ok(CliMode::PtyDemo);
+    };
+    if args.next().is_some() {
+        return Err(format!("unexpected extra argument after {mode:?}"));
+    }
+    match mode.as_str() {
+        "raw-debug" | "raw_debug" | "in_debug" => Ok(CliMode::RawDebug),
+        "-h" | "--help" | "help" => Ok(CliMode::Help),
+        other => Err(format!(
+            "unknown mode {other:?}; use `raw-debug` for escaped PTY byte chunks"
+        )),
+    }
+}
+
+fn print_usage() {
+    eprintln!("usage:\n  cargo run\n  cargo run -- raw-debug\n\naliases: raw_debug, in_debug");
 }
 
 /// stdin 阻塞 read + wake_rx 的非阻塞解锁,二选一。

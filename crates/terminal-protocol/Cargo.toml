@@ -1,0 +1,16 @@
+[package]
+name = "terminal-protocol"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+terminal-engine = { path = "../terminal-engine", features = ["serde"] }
+serde.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

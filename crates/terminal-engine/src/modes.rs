@@ -5,6 +5,7 @@
 //! 等)等真正接到前端再加。
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct TerminalModes {
     pub alt_screen: bool,
     pub app_cursor: bool,
@@ -16,6 +17,8 @@ pub struct TerminalModes {
 ///
 /// alacritty 没有显式的 X10 mode,因此我们也不暴露 —— 它通常被 `Normal` 覆盖。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum MouseReporting {
     /// 不上报。前端鼠标只用于自己的选择 / 滚动。
     Off,

@@ -7,6 +7,7 @@
 //! 实现 trait,避免把外部 trait impl 散到 public 数据类型上。
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct TerminalSize {
     pub rows: u16,
     pub cols: u16,
