@@ -1,0 +1,17 @@
+[package]
+name = "terminal-session"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+pty = { path = "../pty" }
+terminal-engine = { path = "../terminal-engine" }
+terminal-protocol = { path = "../terminal-protocol" }
+terminal-input = { path = "../terminal-input" }
+crossbeam-channel.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

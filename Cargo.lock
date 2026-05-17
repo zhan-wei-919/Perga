@@ -656,6 +656,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminal-session"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "pty",
+ "terminal-engine",
+ "terminal-input",
+ "terminal-protocol",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "termios"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

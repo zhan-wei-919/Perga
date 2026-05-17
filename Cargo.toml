@@ -5,6 +5,7 @@ members = [
     "crates/terminal-engine",
     "crates/terminal-protocol",
     "crates/terminal-input",
+    "crates/terminal-session",
     "crates/perga-cli",
 ]
 # 不设 default-members:`cargo test` 默认覆盖全 workspace,避免静默跳测试。
