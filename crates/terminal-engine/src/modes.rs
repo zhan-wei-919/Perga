@@ -11,6 +11,13 @@ pub struct TerminalModes {
     pub app_cursor: bool,
     pub bracketed_paste: bool,
     pub mouse_reporting: MouseReporting,
+    /// SGR mouse coordinate encoding (`CSI ?1006h`)。决定 Input Encoder 走
+    /// `\x1b[<button;col;row;M/m` 还是 X10 字节形态。tmux / vim / htop 启动时
+    /// 主动开。
+    pub sgr_mouse: bool,
+    /// Focus 上报开关(`CSI ?1004h`)。开启时窗口失 / 获焦点要发 `\x1b[O`/`I`,
+    /// vim 用它做失焦自动保存,tmux 用它切 pane 高亮。
+    pub focus_reporting: bool,
 }
 
 /// 鼠标报告 mode。语义对齐 xterm 的 `?1000` / `?1002` / `?1003`。
@@ -47,6 +54,8 @@ impl TerminalModes {
             app_cursor: mode.contains(TermMode::APP_CURSOR),
             bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
             mouse_reporting: mouse,
+            sgr_mouse: mode.contains(TermMode::SGR_MOUSE),
+            focus_reporting: mode.contains(TermMode::FOCUS_IN_OUT),
         }
     }
 }

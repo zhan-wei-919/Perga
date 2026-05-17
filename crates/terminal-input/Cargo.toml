@@ -1,0 +1,17 @@
+[package]
+name = "terminal-input"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[features]
+# 和 terminal-engine 同款 feature-gated serde。Tauri 层会开 features = ["serde"]。
+serde = ["dep:serde"]
+
+[dependencies]
+terminal-engine = { path = "../terminal-engine" }
+tracing.workspace = true
+serde = { workspace = true, optional = true }
+
+[lints]
+workspace = true

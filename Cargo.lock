@@ -637,6 +637,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminal-input"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "terminal-engine",
+ "tracing",
+]
+
+[[package]]
 name = "terminal-protocol"
 version = "0.1.0"
 dependencies = [

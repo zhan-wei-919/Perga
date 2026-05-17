@@ -97,6 +97,26 @@ fn mouse_reporting_progressions() {
 }
 
 #[test]
+fn sgr_mouse_mode_toggles() {
+    let mut e = engine_24x80();
+    assert!(!e.modes().sgr_mouse);
+    e.feed(b"\x1b[?1006h");
+    assert!(e.modes().sgr_mouse);
+    e.feed(b"\x1b[?1006l");
+    assert!(!e.modes().sgr_mouse);
+}
+
+#[test]
+fn focus_reporting_mode_toggles() {
+    let mut e = engine_24x80();
+    assert!(!e.modes().focus_reporting);
+    e.feed(b"\x1b[?1004h");
+    assert!(e.modes().focus_reporting);
+    e.feed(b"\x1b[?1004l");
+    assert!(!e.modes().focus_reporting);
+}
+
+#[test]
 fn resize_changes_dimensions() {
     let mut e = engine_24x80();
     let snap0 = e.snapshot();
