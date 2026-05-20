@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Perga</title>
+    <style>
+      /* Reset:终端要占满浏览器,不留任何默认外边距。 */
+      html, body, #root {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #1e1e1e;
+        color: #d4d4d4;
+        font-family: ui-monospace, "Cascadia Code", "JetBrains Mono", "Fira Code", "Source Code Pro", Menlo, Consolas, monospace;
+        font-size: 14px;
+        -webkit-font-smoothing: antialiased;
+      }
+      body {
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
