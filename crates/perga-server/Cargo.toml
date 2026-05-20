@@ -1,0 +1,42 @@
+[package]
+name = "perga-server"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "perga-server"
+path = "src/main.rs"
+
+[dependencies]
+# 内嵌 PTY / engine / 协议层 ── server 只是把它们透传到 WebSocket。
+pty = { path = "../pty" }
+terminal-engine = { path = "../terminal-engine", features = ["serde"] }
+terminal-protocol = { path = "../terminal-protocol" }
+# 入站消息复用 KeyEvent / MouseEvent 的 Deserialize,所以打开 serde feature。
+terminal-input = { path = "../terminal-input", features = ["serde"] }
+terminal-session = { path = "../terminal-session" }
+
+# Async transport(side-pool tokio runtime,见 CLAUDE.md §运行时模型)。
+tokio.workspace = true
+axum.workspace = true
+futures-util.workspace = true
+
+# Sync↔async 桥需要 crossbeam Receiver 端的类型。
+crossbeam-channel.workspace = true
+
+# 序列化 / 反序列化。
+serde.workspace = true
+serde_json.workspace = true
+
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+# 集成测试:作为 WS 客户端连测试用 server。
+tokio-tungstenite.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "net", "time", "io-util"] }
+
+[lints]
+workspace = true

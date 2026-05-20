@@ -8,6 +8,10 @@ publish.workspace = true
 name = "perga"
 path = "src/main.rs"
 
+[[bin]]
+name = "perga-bench"
+path = "src/bin/bench.rs"
+
 [dependencies]
 pty = { path = "../pty" }
 terminal-engine = { path = "../terminal-engine" }
