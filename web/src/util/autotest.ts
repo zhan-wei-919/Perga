@@ -119,6 +119,12 @@ export class AutoBench {
     }
   }
 
+  /// 记录一个已排队的 RAF render 在 flush 前被取消(GridCanvas 卸载)。
+  /// 与 onRenderScheduled 配对,避免 pending 计数泄漏导致 waitSettle 永久超时。
+  onRenderCancelled(): void {
+    if (this.pendingRenderFrames > 0) this.pendingRenderFrames--;
+  }
+
   /// 跑一轮基准:连续执行 `iterations` 条 `command`。
   /// 已在运行或未 attach socket 时返回 null。
   async run(

@@ -60,3 +60,20 @@ export function measureCell(fontFamily: string, fontSize: number): CellMetrics {
     fontSize,
   };
 }
+
+/// 一个像素盒子能装下多少 cell(rows × cols)。
+///
+/// floor:cells 必须填得下,半 cell 不画。最小 1 是给 alacritty / PTY 一个合法值
+/// ── 0 行 0 列会让 alacritty 算子里 div by zero。
+///
+/// 初始 connect(`pane_leaf`)与 resize 上报(`resize.ts`)共用这一份定义,
+/// 避免「容器尺寸 → 网格」公式漂移。
+export function cellsForBox(
+  box: { width: number; height: number },
+  m: Pick<CellMetrics, "cellW" | "cellH">,
+): { rows: number; cols: number } {
+  return {
+    rows: Math.max(1, Math.floor(box.height / m.cellH)),
+    cols: Math.max(1, Math.floor(box.width / m.cellW)),
+  };
+}

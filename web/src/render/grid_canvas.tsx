@@ -38,6 +38,9 @@ export type GridCanvasProps = {
   fontSize?: number;
   onRenderScheduled?: () => void;
   onRenderFrame?: (durationMs: number) => void;
+  /** 已 scheduled 的 RAF 在 flush 前被取消(组件卸载)。与 onRenderScheduled
+   *  配对,让下游 pending 计数不泄漏。 */
+  onRenderCancelled?: () => void;
 };
 
 export type CanvasBackingSize = {
@@ -179,8 +182,11 @@ export const GridCanvas: Component<GridCanvasProps> = (props) => {
 
   onCleanup(() => {
     if (rafId !== undefined) {
+      // 已 onRenderScheduled 但 RAF 还没 flush ── 取消并通知,否则下游
+      // (autotest)的 pending 计数会泄漏:scheduled 永远等不到配对的 frame。
       window.cancelAnimationFrame(rafId);
       rafId = undefined;
+      props.onRenderCancelled?.();
     }
   });
 
