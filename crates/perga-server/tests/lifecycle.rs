@@ -64,10 +64,7 @@ async fn ws_upgrade_yields_init_frame() {
     // drop session → PTY 子进程被 SIGHUP/SIGKILL 清掉。测试不直接断言
     // 子进程清理(那是 terminal-session 的责任,已在它自己的集成测试覆盖),
     // 这里只验 close 不 hang。
-    socket
-        .send(Message::Close(None))
-        .await
-        .expect("send close");
+    socket.send(Message::Close(None)).await.expect("send close");
     drop(socket);
 
     server.abort();
@@ -143,10 +140,7 @@ async fn key_input_reaches_pty() {
         "unexpected event type after key input: {ty}"
     );
 
-    socket
-        .send(Message::Close(None))
-        .await
-        .expect("send close");
+    socket.send(Message::Close(None)).await.expect("send close");
     drop(socket);
     server.abort();
 }

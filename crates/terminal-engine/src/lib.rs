@@ -9,10 +9,11 @@
 mod engine;
 mod listener;
 mod modes;
+mod shell_integration;
 mod size;
 mod snapshot;
 
-pub use engine::TerminalEngine;
+pub use engine::{ResolvedCommand, TerminalEngine};
 pub use modes::{MouseReporting, TerminalModes};
 pub use size::TerminalSize;
 pub use snapshot::{

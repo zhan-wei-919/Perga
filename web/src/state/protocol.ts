@@ -79,16 +79,30 @@ export type ProtocolEvent =
       rows: RowEntry[][];
       modes: TerminalModes;
       title: string | null;
+      // Canvas 活动区起始视口行,含义见 patch.active_top。
+      active_top: number;
     }
   | {
       type: "patch";
       seq: number;
       cursor: Cursor;
       dirty_rows: { index: number; entries: RowEntry[] }[];
+      // Canvas 只渲染 [active_top, size.rows);[0, active_top) 已被命令块收走。
+      // 每帧必发(后端每帧重算),无 shell 集成 / alt-screen 时为 0(全屏)。
+      active_top: number;
       modes?: TerminalModes;
       title?: TitleChange;
     }
-  | { type: "exited"; seq: number; status: ExitStatus };
+  | { type: "exited"; seq: number; status: ExitStatus }
+  // 一条跑完的命令收成的命令块,后端在 emit 对应 patch 之前发。command 是
+  // 命令头各行,output 是输出各行,都是 RowEntry RLE。前端直接渲染成 DOM 块。
+  | {
+      type: "command_block";
+      seq: number;
+      exit: number | null;
+      command: RowEntry[][];
+      output: RowEntry[][];
+    };
 
 // 默认色常量。RowEntry::Text 没带 fg/bg/attrs 时落到这里。
 export const DEFAULT_FG: Color = { named: "foreground" };

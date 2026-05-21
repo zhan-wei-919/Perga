@@ -5,6 +5,7 @@
 
 import { createStore, produce } from "solid-js/store";
 
+import { commandBlockFromEvent } from "./blocks";
 import type { Cell, ProtocolEvent, TerminalSize } from "./protocol";
 import {
   applyDirtyRowsToGrid,
@@ -18,6 +19,8 @@ export type SessionStore = {
   state: SessionViewState;
   grid: Cell[][];
   dispatch: (ev: ProtocolEvent) => void;
+  /// 切换某个命令块的折叠态。纯 UI 操作,不走协议。
+  toggleBlockFold: (id: number) => void;
 };
 
 export function createSessionStore(size: TerminalSize): SessionStore {
@@ -28,6 +31,8 @@ export function createSessionStore(size: TerminalSize): SessionStore {
     switch (ev.type) {
       case "init":
         replaceGridRows(grid, ev.rows, ev.size);
+        // 不把 blocks 列进对象 ── setState 是浅合并,blocks 因此跨 resize-init
+        // 保留(已下发的命令块是冻结历史,F9)。
         setState({
           size: ev.size,
           cursor: ev.cursor,
@@ -36,6 +41,7 @@ export function createSessionStore(size: TerminalSize): SessionStore {
           rowGen: new Array(ev.size.rows).fill(1),
           seq: ev.seq,
           exited: false,
+          activeTop: ev.active_top,
         });
         return;
 
@@ -45,6 +51,7 @@ export function createSessionStore(size: TerminalSize): SessionStore {
           produce((draft) => {
             draft.cursor = ev.cursor;
             draft.seq = ev.seq;
+            draft.activeTop = ev.active_top;
             if (ev.modes) draft.modes = ev.modes;
             if (ev.title) {
               draft.title = ev.title.kind === "set" ? ev.title.value : null;
@@ -52,6 +59,19 @@ export function createSessionStore(size: TerminalSize): SessionStore {
             for (const index of touchedRows) {
               draft.rowGen[index] = (draft.rowGen[index] ?? 0) + 1;
             }
+          }),
+        );
+        return;
+      }
+
+      case "command_block": {
+        // 解码在 produce 外做,只把成品 push 进 store。command_block 总在对应
+        // patch 之前到,前端据此先收块、随后的 patch 再裁 Canvas。
+        const block = commandBlockFromEvent(ev);
+        setState(
+          produce((draft) => {
+            draft.blocks.push(block);
+            draft.seq = ev.seq;
           }),
         );
         return;
@@ -68,5 +88,14 @@ export function createSessionStore(size: TerminalSize): SessionStore {
     }
   }
 
-  return { state, grid, dispatch };
+  function toggleBlockFold(id: number): void {
+    setState(
+      produce((draft) => {
+        const blk = draft.blocks.find((b) => b.id === id);
+        if (blk) blk.folded = !blk.folded;
+      }),
+    );
+  }
+
+  return { state, grid, dispatch, toggleBlockFold };
 }

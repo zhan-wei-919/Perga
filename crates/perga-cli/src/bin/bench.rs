@@ -51,7 +51,12 @@ fn main() -> Result<(), String> {
     for _ in 0..20 {
         engine.feed(&payload);
         let _ = engine.drain_pending_writes();
-        let _ = encoder.encode_frame(engine.snapshot(), engine.modes(), engine.title());
+        let _ = encoder.encode_frame(
+            engine.snapshot(),
+            engine.modes(),
+            engine.title(),
+            engine.active_top(),
+        );
     }
 
     let cap = total / chunk + 16;
@@ -71,8 +76,9 @@ fn main() -> Result<(), String> {
         let snap = engine.snapshot();
         let modes = engine.modes();
         let title = engine.title();
+        let active_top = engine.active_top();
         let t2 = Instant::now();
-        let ev = encoder.encode_frame(snap, modes, title);
+        let ev = encoder.encode_frame(snap, modes, title, active_top);
         let t3 = Instant::now();
         let json = serde_json::to_string(&ev).map_err(|e| format!("serialize: {e}"))?;
         let t4 = Instant::now();
@@ -106,7 +112,10 @@ fn main() -> Result<(), String> {
         feed_d.len() as f64 / wall.as_secs_f64()
     );
     println!("wire:        {:.2} MiB", mib_wire);
-    println!("wire ratio:  {:.2}× (output JSON / input bytes)", mib_wire / mib_in);
+    println!(
+        "wire ratio:  {:.2}× (output JSON / input bytes)",
+        mib_wire / mib_in
+    );
     Ok(())
 }
 

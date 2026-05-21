@@ -1,7 +1,7 @@
 // session 状态层单测:
 // - expandRowEntries:RLE 三种 entry 的纯解码逻辑。
-// - createSessionStore:协议事件 → store 的真实生产路径(Init/Patch/Exited)。
-//   createStore 在 jsdom 下能正常跑,直接测生产路径,不保留并行纯 reducer。
+// - createSessionStore:协议事件 → store 的真实生产路径
+//   (Init/Patch/Exited/CommandBlock)。createStore 在 jsdom 下能正常跑。
 
 import { describe, expect, it } from "vitest";
 
@@ -93,6 +93,7 @@ describe("createSessionStore", () => {
       ],
       modes: store.state.modes,
       title: "shell",
+      active_top: 0,
     });
 
     expect(store.grid).toBe(gridRef);
@@ -117,6 +118,7 @@ describe("createSessionStore", () => {
       ],
       modes: store.state.modes,
       title: null,
+      active_top: 0,
     });
 
     const gridRef = store.grid;
@@ -130,6 +132,7 @@ describe("createSessionStore", () => {
       seq: 2,
       cursor: { row: 1, col: 0, visible: true, style: "block" },
       dirty_rows: [{ index: 1, entries: [{ type: "text", s: "xy" }] }],
+      active_top: 0,
     });
 
     expect(store.grid).toBe(gridRef);
@@ -158,6 +161,7 @@ describe("createSessionStore", () => {
       rows: [[{ type: "blank", count: 1 }]],
       modes: store.state.modes,
       title: null,
+      active_top: 0,
     });
     expect(store.state.title).toBeNull();
 
@@ -166,6 +170,7 @@ describe("createSessionStore", () => {
       seq: 2,
       cursor: { row: 0, col: 0, visible: true, style: "block" },
       dirty_rows: [],
+      active_top: 0,
       title: { kind: "set", value: "hello" },
     });
     expect(store.state.title).toBe("hello");
@@ -175,6 +180,7 @@ describe("createSessionStore", () => {
       seq: 3,
       cursor: { row: 0, col: 0, visible: true, style: "block" },
       dirty_rows: [],
+      active_top: 0,
       title: { kind: "reset" },
     });
     expect(store.state.title).toBeNull();
@@ -190,6 +196,7 @@ describe("createSessionStore", () => {
       rows: [[{ type: "blank", count: 1 }], [{ type: "blank", count: 1 }]],
       modes: store.state.modes,
       title: null,
+      active_top: 0,
     });
 
     store.dispatch({
@@ -200,6 +207,7 @@ describe("createSessionStore", () => {
         { index: 99, entries: [{ type: "text", s: "x" }] },
         { index: 0, entries: [{ type: "text", s: "y" }] },
       ],
+      active_top: 0,
     });
 
     expect(store.grid[0][0].ch).toBe("y");
@@ -214,5 +222,101 @@ describe("createSessionStore", () => {
     });
     expect(store.state.exited).toBe(true);
     expect(store.state.seq).toBe(42);
+  });
+});
+
+describe("command blocks + activeTop", () => {
+  /// 起一个已 init 过的 store。
+  function initedStore(rows: number, cols: number) {
+    const store = createSessionStore({ rows, cols });
+    store.dispatch({
+      type: "init",
+      seq: 1,
+      size: { rows, cols },
+      cursor: { row: 0, col: 0, visible: true, style: "block" },
+      rows: Array.from({ length: rows }, () => [
+        { type: "blank" as const, count: cols },
+      ]),
+      modes: store.state.modes,
+      title: null,
+      active_top: 0,
+    });
+    return store;
+  }
+
+  it("command_block appends a decoded block", () => {
+    const store = initedStore(4, 10);
+    store.dispatch({
+      type: "command_block",
+      seq: 7,
+      exit: 0,
+      command: [[{ type: "text", s: "$ ls" }]],
+      output: [[{ type: "text", s: "a" }], [{ type: "text", s: "b" }]],
+    });
+
+    expect(store.state.blocks).toHaveLength(1);
+    const blk = store.state.blocks[0];
+    expect(blk.id).toBe(7);
+    expect(blk.exit).toBe(0);
+    expect(blk.folded).toBe(false);
+    expect(blk.command[0].map((c) => c.ch).join("")).toBe("$ ls");
+    expect(blk.output).toHaveLength(2);
+    expect(blk.output[0][0].ch).toBe("a");
+    expect(blk.output[1][0].ch).toBe("b");
+  });
+
+  it("command_block rows keep their own captured width (no reflow)", () => {
+    const store = initedStore(4, 10);
+    // 命令行 5 列、输出行 3 列 —— 各保持自己的宽度,不对齐到 cols=10。
+    store.dispatch({
+      type: "command_block",
+      seq: 2,
+      exit: null,
+      command: [[{ type: "text", s: "abcde" }]],
+      output: [[{ type: "text", s: "xyz" }]],
+    });
+    const blk = store.state.blocks[0];
+    expect(blk.command[0]).toHaveLength(5);
+    expect(blk.output[0]).toHaveLength(3);
+  });
+
+  it("activeTop updates from init and patch", () => {
+    const store = initedStore(6, 4);
+    expect(store.state.activeTop).toBe(0);
+    store.dispatch({
+      type: "patch",
+      seq: 2,
+      cursor: { row: 0, col: 0, visible: true, style: "block" },
+      dirty_rows: [],
+      active_top: 3,
+    });
+    expect(store.state.activeTop).toBe(3);
+  });
+
+  it("blocks survive a resize-triggered init", () => {
+    const store = initedStore(4, 10);
+    store.dispatch({
+      type: "command_block",
+      seq: 2,
+      exit: 0,
+      command: [[{ type: "text", s: "$ x" }]],
+      output: [],
+    });
+    expect(store.state.blocks).toHaveLength(1);
+
+    // resize → encoder 发一条新 size 的 Init。block 是冻结历史,必须保留。
+    store.dispatch({
+      type: "init",
+      seq: 3,
+      size: { rows: 6, cols: 12 },
+      cursor: { row: 0, col: 0, visible: true, style: "block" },
+      rows: Array.from({ length: 6 }, () => [
+        { type: "blank" as const, count: 12 },
+      ]),
+      modes: store.state.modes,
+      title: null,
+      active_top: 0,
+    });
+    expect(store.state.blocks).toHaveLength(1);
   });
 });

@@ -1,8 +1,10 @@
-// autotest 的纯统计 helper 单测。静默检测状态机依赖真实计时器,不在此覆盖。
+// autotest 单测:纯统计 helper + run() 主循环。
+// run() 的命令阶段已由 command_block 事件驱动 —— 用合成事件流即可确定性地测。
 
 import { describe, expect, it } from "vitest";
 
-import { percentile, summarize } from "../src/util/autotest";
+import type { ClientMessage } from "../src/state/wire";
+import { AutoBench, percentile, summarize } from "../src/util/autotest";
 
 describe("summarize", () => {
   it("空样本返回全 0", () => {
@@ -41,5 +43,51 @@ describe("percentile", () => {
 
   it("单元素任意分位都返回该元素", () => {
     expect(percentile([42], 0.99)).toBe(42);
+  });
+});
+
+describe("AutoBench.run", () => {
+  it("returns null when no socket is attached", async () => {
+    const bench = new AutoBench();
+    expect(await bench.run("ls", 1)).toBeNull();
+  });
+
+  it("resolves each command on its command_block event", async () => {
+    const bench = new AutoBench();
+    const sent: ClientMessage[] = [];
+    bench.attach(
+      (msg) => {
+        sent.push(msg);
+        // 模拟后端:收到回车后,命令跑完回一条 command_block。
+        if (msg.type === "key" && msg.key.type === "enter") {
+          setTimeout(() => {
+            bench.onEvent(0.1);
+            bench.onCommandBlock();
+          }, 5);
+        }
+      },
+      () => false,
+    );
+
+    const result = await bench.run("ls", 3);
+    expect(result).not.toBeNull();
+    expect(result?.completed).toBe(3);
+    expect(result?.timeouts).toBe(0);
+    expect(result?.iterations).toBe(3);
+    // 每条命令:'l'、's' 两个 char key + 一个 enter key。
+    const enters = sent.filter(
+      (m) => m.type === "key" && m.key.type === "enter",
+    );
+    expect(enters).toHaveLength(3);
+  });
+
+  it("stops early when abort signals", async () => {
+    const bench = new AutoBench();
+    bench.attach(
+      () => {},
+      () => true,
+    );
+    const result = await bench.run("ls", 5);
+    expect(result?.completed).toBe(0);
   });
 });

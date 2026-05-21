@@ -54,8 +54,8 @@ pub async fn ws_handler(
     ws: WebSocketUpgrade,
     Query(params): Query<SessionParams>,
 ) -> Result<axum::response::Response, (StatusCode, String)> {
-    let (rows, cols) = validate_size(params.rows, params.cols)
-        .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
+    let (rows, cols) =
+        validate_size(params.rows, params.cols).map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
 
     // PtyConfig::with_default_shell 读 $SHELL,继承当前 cwd。
     // 放到 spawn_blocking 是因为 PtySession::spawn 内部会 fork + exec,
@@ -74,7 +74,9 @@ pub async fn ws_handler(
     })?
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
-    Ok(ws.on_upgrade(move |socket| handle_socket(socket, session)).into_response())
+    Ok(ws
+        .on_upgrade(move |socket| handle_socket(socket, session))
+        .into_response())
 }
 
 /// 1 <= size <= 1000。

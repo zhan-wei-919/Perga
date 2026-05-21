@@ -12,6 +12,7 @@
 // - RLE 缓存换来的窄带宽优势已经在 wire 端用过了 ── 解码后再保留 RLE 只会
 //   让渲染层做二次解码,没意义。
 
+import type { CommandBlock } from "./blocks";
 import {
   Cell,
   Color,
@@ -38,6 +39,11 @@ export type SessionViewState = {
   seq: number;
   // 子进程是否退出。一旦置 true,后续不再接受输入(WS 也会很快关)。
   exited: boolean;
+  // 跑完的命令块,append-only。BlockList 渲染它。
+  blocks: CommandBlock[];
+  // Canvas 活动区起始视口行 ── Canvas 只渲染 [activeTop, size.rows),
+  // [0, activeTop) 已被命令块收走。每帧由后端重算下发。
+  activeTop: number;
 };
 
 export function blankCell(): Cell {
@@ -68,6 +74,8 @@ export function emptyViewState(size: TerminalSize): SessionViewState {
     rowGen: new Array(size.rows).fill(0),
     seq: 0,
     exited: false,
+    blocks: [],
+    activeTop: 0,
   };
 }
 

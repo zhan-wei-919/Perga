@@ -36,6 +36,8 @@ impl ProtocolEncoder {
 
     /// 喂入一帧新状态,产生 `Init` 或 `Patch` 事件。
     ///
+    /// `active_top` 直接透传进帧 —— 不参与 diff,每帧都带最新值。
+    ///
     /// 判断顺序:
     /// 1. 缓存为空 → `Init`,记下缓存。
     /// 2. 缓存 size 与当前 size 不一致 → `Init` 重置(grid 维度变了,前端
@@ -46,6 +48,7 @@ impl ProtocolEncoder {
         snapshot: Snapshot,
         modes: TerminalModes,
         title: Option<String>,
+        active_top: u16,
     ) -> ProtocolEvent {
         self.seq += 1;
 
@@ -63,6 +66,7 @@ impl ProtocolEncoder {
                     seq: self.seq,
                     cursor: snapshot.cursor,
                     dirty_rows,
+                    active_top,
                     modes: modes_changed,
                     title: title_changed,
                 }
@@ -84,6 +88,7 @@ impl ProtocolEncoder {
                     rows: encoded_rows,
                     modes,
                     title,
+                    active_top,
                 }
             }
         }
@@ -95,6 +100,23 @@ impl ProtocolEncoder {
         ProtocolEvent::Exited {
             seq: self.seq,
             status,
+        }
+    }
+
+    /// 产生一条命令块事件。`command_rows` / `output_rows` 各行经 [`encode_row`]
+    /// 做 RLE 编码。`seq` 同样递增,与 frame events 共享一个序列。
+    pub fn encode_command_block(
+        &mut self,
+        exit: Option<i32>,
+        command_rows: &[Row],
+        output_rows: &[Row],
+    ) -> ProtocolEvent {
+        self.seq += 1;
+        ProtocolEvent::CommandBlock {
+            seq: self.seq,
+            exit,
+            command: command_rows.iter().map(|r| encode_row(&r.cells)).collect(),
+            output: output_rows.iter().map(|r| encode_row(&r.cells)).collect(),
         }
     }
 }

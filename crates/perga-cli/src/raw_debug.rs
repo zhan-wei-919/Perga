@@ -35,7 +35,12 @@ pub(crate) fn run(size: PtySize) -> Result<(), Box<dyn std::error::Error>> {
     let session = PtySession::spawn(cfg)?;
     let mut engine = TerminalEngine::new(TerminalSize::new(size.rows, size.cols));
     let mut encoder = ProtocolEncoder::new();
-    print_json_event(encoder.encode_frame(engine.snapshot(), engine.modes(), engine.title()))?;
+    print_json_event(encoder.encode_frame(
+        engine.snapshot(),
+        engine.modes(),
+        engine.title(),
+        engine.active_top(),
+    ))?;
 
     let stdin_fd = io::stdin().as_raw_fd();
     // SAFETY: stdin (fd 0) is valid for the process lifetime.
@@ -110,10 +115,19 @@ fn handle_event(
                     return Ok(true);
                 }
             }
+            // 与 terminal-session 的事件循环一致:命令块在 frame 之前 emit。
+            for cmd in engine.drain_marks() {
+                print_json_event(encoder.encode_command_block(
+                    cmd.exit,
+                    &cmd.command_rows,
+                    &cmd.output_rows,
+                ))?;
+            }
             print_json_event(encoder.encode_frame(
                 engine.snapshot(),
                 engine.modes(),
                 engine.title(),
+                engine.active_top(),
             ))?;
             Ok(false)
         }

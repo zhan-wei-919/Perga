@@ -16,7 +16,12 @@ fn setup() -> (TerminalEngine, ProtocolEncoder) {
 }
 
 fn encode_current(engine: &TerminalEngine, encoder: &mut ProtocolEncoder) -> ProtocolEvent {
-    encoder.encode_frame(engine.snapshot(), engine.modes(), engine.title())
+    encoder.encode_frame(
+        engine.snapshot(),
+        engine.modes(),
+        engine.title(),
+        engine.active_top(),
+    )
 }
 
 fn init_rows(event: &ProtocolEvent) -> &Vec<Vec<RowEntry>> {
@@ -287,8 +292,13 @@ fn title_change_emits_patch_with_title() {
 #[test]
 fn title_clear_to_none_emits_reset() {
     let (engine, mut encoder) = setup();
-    let _ = encoder.encode_frame(engine.snapshot(), engine.modes(), Some("x".into())); // Init
-    let event = encoder.encode_frame(engine.snapshot(), engine.modes(), None);
+    let _ = encoder.encode_frame(
+        engine.snapshot(),
+        engine.modes(),
+        Some("x".into()),
+        engine.active_top(),
+    ); // Init
+    let event = encoder.encode_frame(engine.snapshot(), engine.modes(), None, engine.active_top());
     match event {
         ProtocolEvent::Patch { title, .. } => {
             assert_eq!(title, Some(TitleChange::Reset));

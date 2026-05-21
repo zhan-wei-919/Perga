@@ -4,8 +4,8 @@
 //! 单线程独占 `TerminalEngine` 和 `ProtocolEncoder`,所有可变状态都在这里。
 //! 外界通过 channel 进出,不持锁,不共享内部状态。
 //!
-//! Coalescing 故意不做:一个 `PtyEvent::Output` → 一个 `encode_frame` → 一条
-//! `ProtocolEvent`。Encoder 内部 RLE + row diff 已经把 wire size 压住,
+//! Coalescing 故意不做:一个 `PtyEvent::Output` → 0~N 条 `CommandBlock` + 一个
+//! `encode_frame`。Encoder 内部 RLE + row diff 已经把 wire size 压住,
 //! 真有性能问题再在这里加 batching。
 
 use crossbeam_channel::{select, Receiver, Sender};
@@ -73,6 +73,15 @@ fn handle_pty_event(
             for w in engine.drain_pending_writes() {
                 if pty_command_tx.send(PtyCommand::Write(w)).is_err() {
                     // PTY 写端死了,后续输出也送不出去,直接退。
+                    return false;
+                }
+            }
+            // 跑完的命令收成命令块 ── 必须在 emit_frame 之前发,前端才能在收到
+            // 对应 Patch 之前把这段内容收进 BlockList、同帧裁掉 Canvas。
+            for cmd in engine.drain_marks() {
+                let ev =
+                    encoder.encode_command_block(cmd.exit, &cmd.command_rows, &cmd.output_rows);
+                if event_tx.send(ev).is_err() {
                     return false;
                 }
             }
@@ -160,6 +169,11 @@ fn emit_frame(
     encoder: &mut ProtocolEncoder,
     event_tx: &Sender<ProtocolEvent>,
 ) -> bool {
-    let ev = encoder.encode_frame(engine.snapshot(), engine.modes(), engine.title());
+    let ev = encoder.encode_frame(
+        engine.snapshot(),
+        engine.modes(),
+        engine.title(),
+        engine.active_top(),
+    );
     event_tx.send(ev).is_ok()
 }

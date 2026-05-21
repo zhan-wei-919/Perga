@@ -42,6 +42,12 @@ fn event_contains(event: &ProtocolEvent, needle: &str) -> bool {
         ProtocolEvent::Patch { dirty_rows, .. } => dirty_rows
             .iter()
             .any(|r| entries_contain(&r.entries, needle)),
+        ProtocolEvent::CommandBlock {
+            command, output, ..
+        } => command
+            .iter()
+            .chain(output)
+            .any(|r| entries_contain(r, needle)),
         ProtocolEvent::Exited { .. } => false,
     }
 }
@@ -185,5 +191,57 @@ fn resize_triggers_init_with_new_size() {
     assert!(
         saw_resized_init,
         "expected an Init with rows=40 cols=120 after resize"
+    );
+}
+
+/// OSC 133 全链路:一个直接 printf 出 OSC 133 标记 + 内容的进程,应该让事件流
+/// 里出现 `CommandBlock`,且其后的帧 `active_top` 推进过 0。
+///
+/// 用 `printf` 而非交互式 shell ── 进程一次吐完所有字节再退出,无时序抖动。
+#[test]
+fn osc133_emits_command_block_before_frame() {
+    // printf body:`\033` = ESC,`\\` = 一个反斜杠(ST 第二字节)。
+    let osc_a = r"\033]133;A\033\\";
+    let osc_c = r"\033]133;C\033\\";
+    let osc_d = r"\033]133;D;0\033\\";
+    let body = format!("{osc_a}$ cmd\\r\\n{osc_c}out\\r\\n{osc_d}");
+    let arg = format!("printf '{body}'");
+    let session =
+        TerminalSession::spawn(pty_config("/bin/sh", &["-c", &arg])).expect("spawn /bin/sh");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let events = drain_until_exited(&session, deadline);
+
+    // 必有一条 CommandBlock,command 含 "cmd"、output 含 "out"、exit 0。
+    let block_idx = events
+        .iter()
+        .position(|ev| matches!(ev, ProtocolEvent::CommandBlock { .. }))
+        .expect("expected a CommandBlock event");
+    match &events[block_idx] {
+        ProtocolEvent::CommandBlock {
+            exit,
+            command,
+            output,
+            ..
+        } => {
+            assert_eq!(*exit, Some(0));
+            assert!(command.iter().any(|r| entries_contain(r, "cmd")));
+            assert!(output.iter().any(|r| entries_contain(r, "out")));
+        }
+        _ => unreachable!("position matched CommandBlock"),
+    }
+
+    // CommandBlock 之后必有一条 active_top > 0 的帧。
+    let active_top_advanced = events[block_idx + 1..].iter().any(|ev| match ev {
+        ProtocolEvent::Patch { active_top, .. } | ProtocolEvent::Init { active_top, .. } => {
+            *active_top > 0
+        }
+        _ => false,
+    });
+    assert!(active_top_advanced, "active_top 应推进到命令块之后");
+
+    assert!(
+        matches!(events.last(), Some(ProtocolEvent::Exited { .. })),
+        "最后一条应是 Exited"
     );
 }

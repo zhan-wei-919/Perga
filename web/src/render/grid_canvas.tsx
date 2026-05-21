@@ -19,6 +19,10 @@
 //
 // 6. **raw grid**:grid 不进入 Solid store。renderer 通过 rowGen 响应式信号
 //    得知哪几行变了,绘制时读取普通 Cell[][],避开 store proxy trap。
+//
+// 7. **activeTop 裁剪**:只渲染 [activeTop, rows) ── [0, activeTop) 的内容
+//    已被命令块(DOM)收走。activeTop 变化会改 backing size,自然触发整屏
+//    重画;grid 行 r 画在显示行 r - activeTop。
 
 import { Component, createEffect, onCleanup, onMount } from "solid-js";
 
@@ -54,9 +58,12 @@ export function canvasBackingSize(
   size: TerminalSize,
   metrics: Pick<CellMetrics, "cellW" | "cellH">,
   ratio: number,
+  activeTop: number,
 ): CanvasBackingSize {
+  // Canvas 只画活动区 [activeTop, rows);[0, activeTop) 归命令块。
+  const visibleRows = Math.max(0, size.rows - activeTop);
   const cssW = size.cols * metrics.cellW;
-  const cssH = size.rows * metrics.cellH;
+  const cssH = visibleRows * metrics.cellH;
   return {
     cssW,
     cssH,
@@ -111,6 +118,10 @@ export const GridCanvas: Component<GridCanvasProps> = (props) => {
   const lastDrawnGen: number[] = [];
   const pendingRows = new Set<number>();
   let lastCursor: Cursor | undefined;
+  // 上一帧画时用的 activeTop。它一变,grid 行 → 显示行的映射就整体偏移,
+  // 必须整屏重画 —— 不能只靠 backing size 判定(rows 与 activeTop 同时变、
+  // 差值不变时 backing size 不变,但映射已经变了)。
+  let lastActiveTop = -1;
   let rafId: number | undefined;
   const drawCache = newDrawCache();
 
@@ -135,15 +146,17 @@ export const GridCanvas: Component<GridCanvasProps> = (props) => {
 
     let needsRender = false;
     const size = props.state.size;
-    const target = canvasBackingSize(size, metrics, dpr());
-    if (!canvasBackingSizeMatches(canvasRef, target)) {
+    const activeTop = props.state.activeTop;
+    const target = canvasBackingSize(size, metrics, dpr(), activeTop);
+    if (!canvasBackingSizeMatches(canvasRef, target) || activeTop !== lastActiveTop) {
       lastDrawnGen.length = 0;
       lastCursor = undefined;
       queueAllRows(size);
       needsRender = true;
     }
 
-    for (let r = 0; r < size.rows; r++) {
+    // 只看活动区的行;[0, activeTop) 归命令块,它们的 rowGen 即使变了也不画。
+    for (let r = activeTop; r < size.rows; r++) {
       const gen = props.state.rowGen[r] ?? 0;
       const last = lastDrawnGen[r] ?? -1;
       if (gen !== last) {
@@ -208,16 +221,18 @@ export const GridCanvas: Component<GridCanvasProps> = (props) => {
 
     const startedAt = performance.now();
     const size = props.state.size;
-    const target = canvasBackingSize(size, metrics, dpr());
-    if (!canvasBackingSizeMatches(canvasRef, target)) {
+    const activeTop = props.state.activeTop;
+    const target = canvasBackingSize(size, metrics, dpr(), activeTop);
+    if (!canvasBackingSizeMatches(canvasRef, target) || activeTop !== lastActiveTop) {
       syncCanvasSize(target);
       lastDrawnGen.length = 0;
       lastCursor = undefined;
       queueAllRows(size);
     }
+    lastActiveTop = activeTop;
 
     const rowsToDraw = [...pendingRows]
-      .filter((row) => row >= 0 && row < size.rows)
+      .filter((row) => row >= activeTop && row < size.rows)
       .sort((a, b) => a - b);
     pendingRows.clear();
 
@@ -225,14 +240,14 @@ export const GridCanvas: Component<GridCanvasProps> = (props) => {
     for (const r of rowsToDraw) {
       const row = props.grid[r];
       if (row) {
-        drawRow(ctx, metrics, drawCache, r, row, size.cols);
+        drawRow(ctx, metrics, drawCache, r - activeTop, row, size.cols);
       }
       lastDrawnGen[r] = props.state.rowGen[r] ?? 0;
       drawnRows.add(r);
     }
     lastDrawnGen.length = size.rows;
 
-    drawCursor(ctx, metrics, drawnRows);
+    drawCursor(ctx, metrics, drawnRows, activeTop);
     props.onRenderFrame?.(performance.now() - startedAt);
   }
 
@@ -240,22 +255,26 @@ export const GridCanvas: Component<GridCanvasProps> = (props) => {
     ctx: CanvasRenderingContext2D,
     metrics: CellMetrics,
     drawnRows: Set<number>,
+    activeTop: number,
   ): void {
     const cursor = props.state.cursor;
     if (lastCursor?.visible && cursorChanged(lastCursor, cursor)) {
       const row = props.grid[lastCursor.row];
-      if (row && !drawnRows.has(lastCursor.row)) {
+      const displayRow = lastCursor.row - activeTop;
+      if (row && displayRow >= 0 && !drawnRows.has(lastCursor.row)) {
         const cell = row[lastCursor.col];
         if (cell) {
-          drawSingleCell(ctx, metrics, drawCache, lastCursor.row, lastCursor.col, cell, false);
+          drawSingleCell(ctx, metrics, drawCache, displayRow, lastCursor.col, cell, false);
         }
       }
     }
     if (cursor.visible) {
       const row = props.grid[cursor.row];
-      if (row) {
+      const displayRow = cursor.row - activeTop;
+      // 光标落在命令块区(displayRow < 0)就不画 ── 它不在 Canvas 里。
+      if (row && displayRow >= 0) {
         const cell = row[cursor.col] ?? makeBlank();
-        drawSingleCell(ctx, metrics, drawCache, cursor.row, cursor.col, cell, true);
+        drawSingleCell(ctx, metrics, drawCache, displayRow, cursor.col, cell, true);
       }
     }
     lastCursor = { ...cursor };
@@ -263,7 +282,9 @@ export const GridCanvas: Component<GridCanvasProps> = (props) => {
 
   function syncCanvasSize(target?: CanvasBackingSize): void {
     if (!canvasRef || !metrics) return;
-    const next = target ?? canvasBackingSize(props.state.size, metrics, dpr());
+    const next =
+      target ??
+      canvasBackingSize(props.state.size, metrics, dpr(), props.state.activeTop);
     const ratio = dpr();
     canvasRef.width = next.pixelW;
     canvasRef.height = next.pixelH;
@@ -281,7 +302,8 @@ export const GridCanvas: Component<GridCanvasProps> = (props) => {
     }
   }
 
-  return <canvas ref={canvasRef} />;
+  // display:block ── 去掉 <canvas> 作为 inline 元素时下方的基线空隙。
+  return <canvas ref={canvasRef} style={{ display: "block" }} />;
 };
 
 function cursorChanged(a: Cursor, b: Cursor): boolean {
@@ -315,11 +337,11 @@ function drawRow(
   ctx: CanvasRenderingContext2D,
   m: CellMetrics,
   cache: DrawCache,
-  rowIdx: number,
+  displayRow: number,
   cells: Cell[],
   cols: number,
 ): void {
-  const y = rowIdx * m.cellH;
+  const y = displayRow * m.cellH;
   let i = 0;
   while (i < cols && i < cells.length) {
     const cell = cells[i];
@@ -331,7 +353,7 @@ function drawRow(
     }
 
     if (cell.width === "wide") {
-      drawSingleCell(ctx, m, cache, rowIdx, i, cell, false);
+      drawSingleCell(ctx, m, cache, displayRow, i, cell, false);
       i++;
       continue;
     }
@@ -418,13 +440,13 @@ function drawSingleCell(
   ctx: CanvasRenderingContext2D,
   m: CellMetrics,
   cache: DrawCache,
-  rowIdx: number,
+  displayRow: number,
   col: number,
   cell: Cell,
   isCursor: boolean,
 ): void {
   const x = col * m.cellW;
-  const y = rowIdx * m.cellH;
+  const y = displayRow * m.cellH;
   const w = cell.width === "wide" ? m.cellW * 2 : m.cellW;
 
   const reverse = isCursor || cell.attrs.includes("reverse");

@@ -59,7 +59,12 @@ impl TerminalSession {
 
         // Synthetic baseline:空 grid 的 Init。encoder 会缓存它,后续真实
         // Output 走 Patch。size 立刻可用,消费者不用等 shell 第一字节。
-        let baseline = encoder.encode_frame(engine.snapshot(), engine.modes(), engine.title());
+        let baseline = encoder.encode_frame(
+            engine.snapshot(),
+            engine.modes(),
+            engine.title(),
+            engine.active_top(),
+        );
         // event channel 是刚建的、capacity unbounded,这里 send 不可能失败。
         let _ = event_tx.send(baseline);
 

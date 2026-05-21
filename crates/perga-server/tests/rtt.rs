@@ -116,7 +116,10 @@ fn print_stats(rtts: &[Duration]) {
     let total: Duration = sorted.iter().sum();
     let mean = total / sorted.len() as u32;
     println!();
-    println!("=== Perga WS RTT (key → patch), {} samples ===", sorted.len());
+    println!(
+        "=== Perga WS RTT (key → patch), {} samples ===",
+        sorted.len()
+    );
     println!("  mean:  {:?}", mean);
     println!("  p50:   {:?}", q(0.50));
     println!("  p90:   {:?}", q(0.90));

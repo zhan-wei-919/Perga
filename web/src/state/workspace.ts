@@ -125,7 +125,10 @@ export function createWorkspace(
       const dispatchMs = performance.now() - t0;
       perfTracker.recordDispatch(dispatchMs);
       // autotest 在驱动 focused pane;只把它那条事件流喂进去。
-      if (isFocused()) autoBench?.onEvent(dispatchMs);
+      if (isFocused()) {
+        autoBench?.onEvent(dispatchMs);
+        if (ev.type === "command_block") autoBench?.onCommandBlock();
+      }
     };
 
     return {
