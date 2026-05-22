@@ -42,12 +42,7 @@ fn event_contains(event: &ProtocolEvent, needle: &str) -> bool {
         ProtocolEvent::Patch { dirty_rows, .. } => dirty_rows
             .iter()
             .any(|r| entries_contain(&r.entries, needle)),
-        ProtocolEvent::CommandBlock {
-            command, output, ..
-        } => command
-            .iter()
-            .chain(output)
-            .any(|r| entries_contain(r, needle)),
+        ProtocolEvent::CommandEnd { .. } => false,
         ProtocolEvent::Exited { .. } => false,
     }
 }
@@ -195,11 +190,11 @@ fn resize_triggers_init_with_new_size() {
 }
 
 /// OSC 133 全链路:一个直接 printf 出 OSC 133 标记 + 内容的进程,应该让事件流
-/// 里出现 `CommandBlock`,且其后的帧 `active_top` 推进过 0。
+/// 里出现一条带退出码的 `CommandEnd`。
 ///
 /// 用 `printf` 而非交互式 shell ── 进程一次吐完所有字节再退出,无时序抖动。
 #[test]
-fn osc133_emits_command_block_before_frame() {
+fn osc133_emits_command_end() {
     // printf body:`\033` = ESC,`\\` = 一个反斜杠(ST 第二字节)。
     let osc_a = r"\033]133;A\033\\";
     let osc_c = r"\033]133;C\033\\";
@@ -212,33 +207,12 @@ fn osc133_emits_command_block_before_frame() {
     let deadline = Instant::now() + Duration::from_secs(5);
     let events = drain_until_exited(&session, deadline);
 
-    // 必有一条 CommandBlock,command 含 "cmd"、output 含 "out"、exit 0。
-    let block_idx = events
-        .iter()
-        .position(|ev| matches!(ev, ProtocolEvent::CommandBlock { .. }))
-        .expect("expected a CommandBlock event");
-    match &events[block_idx] {
-        ProtocolEvent::CommandBlock {
-            exit,
-            command,
-            output,
-            ..
-        } => {
-            assert_eq!(*exit, Some(0));
-            assert!(command.iter().any(|r| entries_contain(r, "cmd")));
-            assert!(output.iter().any(|r| entries_contain(r, "out")));
-        }
-        _ => unreachable!("position matched CommandBlock"),
-    }
-
-    // CommandBlock 之后必有一条 active_top > 0 的帧。
-    let active_top_advanced = events[block_idx + 1..].iter().any(|ev| match ev {
-        ProtocolEvent::Patch { active_top, .. } | ProtocolEvent::Init { active_top, .. } => {
-            *active_top > 0
-        }
-        _ => false,
+    // 必有一条 CommandEnd,exit 0。
+    let command_end = events.iter().find_map(|ev| match ev {
+        ProtocolEvent::CommandEnd { exit, .. } => Some(*exit),
+        _ => None,
     });
-    assert!(active_top_advanced, "active_top 应推进到命令块之后");
+    assert_eq!(command_end, Some(Some(0)), "应有一条 exit 0 的 CommandEnd");
 
     assert!(
         matches!(events.last(), Some(ProtocolEvent::Exited { .. })),

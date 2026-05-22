@@ -36,7 +36,8 @@ impl ProtocolEncoder {
 
     /// 喂入一帧新状态,产生 `Init` 或 `Patch` 事件。
     ///
-    /// `active_top` 直接透传进帧 —— 不参与 diff,每帧都带最新值。
+    /// `scrolled` / `cleared` 只在 `Patch` 分支用到 —— `Init`(首帧 / resize)
+    /// 不带它们(resize 不滚动;首帧 history 本空)。
     ///
     /// 判断顺序:
     /// 1. 缓存为空 → `Init`,记下缓存。
@@ -48,7 +49,8 @@ impl ProtocolEncoder {
         snapshot: Snapshot,
         modes: TerminalModes,
         title: Option<String>,
-        active_top: u16,
+        scrolled: &[Row],
+        cleared: bool,
     ) -> ProtocolEvent {
         self.seq += 1;
 
@@ -66,7 +68,8 @@ impl ProtocolEncoder {
                     seq: self.seq,
                     cursor: snapshot.cursor,
                     dirty_rows,
-                    active_top,
+                    scrolled_rows: scrolled.iter().map(|r| encode_row(&r.cells)).collect(),
+                    cleared,
                     modes: modes_changed,
                     title: title_changed,
                 }
@@ -88,7 +91,6 @@ impl ProtocolEncoder {
                     rows: encoded_rows,
                     modes,
                     title,
-                    active_top,
                 }
             }
         }
@@ -103,20 +105,14 @@ impl ProtocolEncoder {
         }
     }
 
-    /// 产生一条命令块事件。`command_rows` / `output_rows` 各行经 [`encode_row`]
-    /// 做 RLE 编码。`seq` 同样递增,与 frame events 共享一个序列。
-    pub fn encode_command_block(
-        &mut self,
-        exit: Option<i32>,
-        command_rows: &[Row],
-        output_rows: &[Row],
-    ) -> ProtocolEvent {
+    /// 产生一条命令结束事件。`line` 是命令输入行的绝对行号,`exit` 是退出码。
+    /// `seq` 同样递增,与 frame events 共享一个序列。
+    pub fn encode_command_end(&mut self, line: u64, exit: Option<i32>) -> ProtocolEvent {
         self.seq += 1;
-        ProtocolEvent::CommandBlock {
+        ProtocolEvent::CommandEnd {
             seq: self.seq,
             exit,
-            command: command_rows.iter().map(|r| encode_row(&r.cells)).collect(),
-            output: output_rows.iter().map(|r| encode_row(&r.cells)).collect(),
+            line,
         }
     }
 }

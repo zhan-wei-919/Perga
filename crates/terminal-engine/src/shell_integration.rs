@@ -47,36 +47,24 @@ pub(crate) struct ScanPoint {
     pub(crate) is_mark: bool,
 }
 
-/// 一条跑完的命令在终端 grid 里占据的绝对行区间。
-///
-/// 行号是 `scroll_total + 视口行` 的绝对坐标,跨滚动稳定。`TerminalEngine`
-/// 在 `drain_marks` 时把它翻回当前 grid 坐标并取出 cell 内容。
+/// 一条跑完的命令的标记。`line` 是命令输入行的绝对行号(`scroll_total +
+/// 视口行` 坐标,跨滚动稳定),`exit` 是退出码。`TerminalEngine` 在
+/// `drain_command_ends` 时取走 —— 只用于在历史里给失败命令打标记,不再组装
+/// 命令块行段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CommandRegion {
-    /// 命令头起点 `(绝对行, 列)`;`None` 表示没收到 `A`。列 >0 出现在上一条
-    /// 命令输出无结尾换行、`A` 落在残留内容后面的情况。
-    pub(crate) prompt: Option<(u64, u16)>,
-    /// 命令输出起始绝对行(= `C` 时的光标行,列恒 0)。
-    pub(crate) command_abs: u64,
-    /// 命令输出结束绝对行(= `D` 时的光标行)。
-    pub(crate) end_abs: u64,
-    /// `D` 时的光标列。>0 说明命令输出无结尾换行,`end_abs` 行上有内容。
-    pub(crate) end_col: u16,
+    /// 命令输入行(`$ cmd` 那一行)的绝对行号。
+    pub(crate) line: u64,
     /// 退出码;shell 没带或解析失败时 `None`。
     pub(crate) exit: Option<i32>,
 }
 
-/// 标记状态机:把零散的 A/C/D 标记凑成完整的命令区间。
+/// 标记状态机:把零散的 A/C/D 标记凑成一条命令。
 enum MarkState {
     /// 不在任何命令里。
     Idle,
-    /// 见过 `A`,等 `C`。`prompt` = `(绝对行, 列)`。
-    PromptSeen { prompt: (u64, u16) },
-    /// 命令执行中,等 `D`。
-    Executing {
-        prompt: Option<(u64, u16)>,
-        command_abs: u64,
-    },
+    /// 命令执行中,等 `D`。`command_abs` = `C` 的绝对行。
+    Executing { command_abs: u64 },
 }
 
 /// 旁路 OSC 133 解析 + 命令区间状态机。
@@ -135,51 +123,40 @@ impl ShellIntegration {
         points
     }
 
-    /// 给 `pending` 队首的标记配上它的绝对行号 + 列,推进状态机。
+    /// 给 `pending` 队首的标记配上它的绝对行号,推进状态机。
     ///
     /// 调用次数必须与上一次 `scan_segment` 返回的偏移数一致。
-    pub(crate) fn resolve_pending(&mut self, abs: u64, col: u16) {
+    pub(crate) fn resolve_pending(&mut self, abs: u64) {
         let Some(mark) = self.pending.pop_front() else {
             debug_assert!(false, "resolve_pending 没有待配对的标记");
             return;
         };
         match mark {
             RawMark::PromptStart => {
-                // A 可以在任何状态出现(上一条命令异常没收尾也无妨),直接重置。
-                self.state = MarkState::PromptSeen { prompt: (abs, col) };
+                // A 可以在任何状态出现 —— 上一条命令异常没收尾,直接重置在途。
+                self.state = MarkState::Idle;
             }
             RawMark::CommandStart => {
-                let prompt = match self.state {
-                    MarkState::PromptSeen { prompt } => Some(prompt),
-                    // C 没有前导 A:命令头区间留空,仍可成块。
-                    MarkState::Idle => None,
+                if matches!(self.state, MarkState::Executing { .. }) {
                     // C 紧接 C:上一条命令没收到 D,丢弃它。
-                    MarkState::Executing { .. } => {
-                        tracing::debug!("shell_integration.command_start_without_end");
-                        None
-                    }
-                };
-                self.state = MarkState::Executing {
-                    prompt,
-                    command_abs: abs,
-                };
+                    tracing::debug!("shell_integration.command_start_without_end");
+                }
+                self.state = MarkState::Executing { command_abs: abs };
             }
             RawMark::CommandEnd { exit } => match self.state {
-                MarkState::Executing {
-                    prompt,
-                    command_abs,
-                } => {
+                MarkState::Executing { command_abs } => {
+                    // 命令输入行 = `C` 行的上一行 —— `C` 经 bash `PS0` / zsh
+                    // `preexec` 在用户回车后的新行发出,光标已在输出首行。
                     self.resolved.push(CommandRegion {
-                        prompt,
-                        command_abs,
-                        end_abs: abs,
-                        end_col: col,
+                        line: command_abs.saturating_sub(1),
                         exit,
                     });
                     self.state = MarkState::Idle;
                 }
                 // D 没有前导 C(例如 source 集成脚本后的第一个 D):无命令可收。
-                _ => tracing::debug!("shell_integration.command_end_without_start"),
+                MarkState::Idle => {
+                    tracing::debug!("shell_integration.command_end_without_start");
+                }
             },
         }
     }
@@ -274,7 +251,7 @@ mod tests {
             let offsets = shell.scan_segment(bytes);
             assert_eq!(offsets.len(), abs_list.len(), "偏移数与提供的 abs 数不一致");
             for &abs in *abs_list {
-                shell.resolve_pending(abs, 0);
+                shell.resolve_pending(abs);
             }
         }
     }
@@ -288,13 +265,11 @@ mod tests {
         let mut shell = ShellIntegration::new();
         let bytes: Vec<u8> = [osc("133;A"), osc("133;C"), osc("133;D;0")].concat();
         feed(&mut shell, &[(&bytes, &[10, 12, 15])]);
+        // line = C 行(12)的上一行 = 11。
         assert_eq!(
             shell.drain_regions(),
             vec![CommandRegion {
-                prompt: Some((10, 0)),
-                command_abs: 12,
-                end_abs: 15,
-                end_col: 0,
+                line: 11,
                 exit: Some(0),
             }]
         );
@@ -311,15 +286,20 @@ mod tests {
         assert_eq!(points.len(), 1);
         assert_eq!(points[0].offset, 3);
         assert!(points[0].is_mark);
-        shell.resolve_pending(7, 0);
+        shell.resolve_pending(7);
         // 接着 C / D,凑齐一条命令。
         feed(
             &mut shell,
             &[(&[osc("133;C"), osc("133;D;0")].concat(), &[8, 9])],
         );
         let regions = shell.drain_regions();
-        assert_eq!(regions.len(), 1);
-        assert_eq!(regions[0].prompt, Some((7, 0)));
+        assert_eq!(
+            regions,
+            vec![CommandRegion {
+                line: 7,
+                exit: Some(0)
+            }]
+        );
     }
 
     #[test]
@@ -330,24 +310,33 @@ mod tests {
     }
 
     #[test]
-    fn command_start_without_prompt_has_no_header() {
+    fn command_start_without_prompt_still_yields_region() {
+        // 没有前导 A 也能凑出命令(line 取 C 上一行)。
         let mut shell = ShellIntegration::new();
         let bytes: Vec<u8> = [osc("133;C"), osc("133;D;0")].concat();
         feed(&mut shell, &[(&bytes, &[3, 6])]);
-        let regions = shell.drain_regions();
-        assert_eq!(regions.len(), 1);
-        assert_eq!(regions[0].prompt, None);
-        assert_eq!(regions[0].command_abs, 3);
+        assert_eq!(
+            shell.drain_regions(),
+            vec![CommandRegion {
+                line: 2,
+                exit: Some(0)
+            }]
+        );
     }
 
     #[test]
-    fn double_prompt_start_keeps_latest() {
+    fn command_at_top_clamps_line_to_zero() {
+        // C 在第 0 行时,line 不下溢。
         let mut shell = ShellIntegration::new();
-        let bytes: Vec<u8> = [osc("133;A"), osc("133;A"), osc("133;C"), osc("133;D;0")].concat();
-        feed(&mut shell, &[(&bytes, &[10, 20, 22, 25])]);
-        let regions = shell.drain_regions();
-        assert_eq!(regions.len(), 1);
-        assert_eq!(regions[0].prompt, Some((20, 0)));
+        let bytes: Vec<u8> = [osc("133;C"), osc("133;D;0")].concat();
+        feed(&mut shell, &[(&bytes, &[0, 0])]);
+        assert_eq!(
+            shell.drain_regions(),
+            vec![CommandRegion {
+                line: 0,
+                exit: Some(0)
+            }]
+        );
     }
 
     #[test]
@@ -355,11 +344,14 @@ mod tests {
         let mut shell = ShellIntegration::new();
         let bytes: Vec<u8> = [osc("133;A"), osc("133;C"), osc("133;C"), osc("133;D;0")].concat();
         feed(&mut shell, &[(&bytes, &[10, 12, 30, 35])]);
-        let regions = shell.drain_regions();
-        assert_eq!(regions.len(), 1);
-        // 第二个 C 丢了前一条在途命令,prompt 因此变 None。
-        assert_eq!(regions[0].command_abs, 30);
-        assert_eq!(regions[0].prompt, None);
+        // 第二个 C 丢了前一条在途命令,line 取第二个 C(30)的上一行。
+        assert_eq!(
+            shell.drain_regions(),
+            vec![CommandRegion {
+                line: 29,
+                exit: Some(0)
+            }]
+        );
     }
 
     #[test]
@@ -375,11 +367,19 @@ mod tests {
         ]
         .concat();
         feed(&mut shell, &[(&bytes, &[1, 2, 3, 4, 5, 6])]);
-        let regions = shell.drain_regions();
-        assert_eq!(regions.len(), 2);
-        assert_eq!(regions[0].exit, Some(0));
-        assert_eq!(regions[1].exit, Some(1));
-        assert_eq!(regions[1].prompt, Some((4, 0)));
+        assert_eq!(
+            shell.drain_regions(),
+            vec![
+                CommandRegion {
+                    line: 1,
+                    exit: Some(0)
+                },
+                CommandRegion {
+                    line: 4,
+                    exit: Some(1)
+                },
+            ]
+        );
     }
 
     #[test]
@@ -399,20 +399,6 @@ mod tests {
             assert_eq!(regions.len(), 1, "body={body}");
             assert_eq!(regions[0].exit, *want, "body={body}");
         }
-    }
-
-    #[test]
-    fn command_end_records_cursor_column() {
-        // D 的列被记进 end_col —— 命令输出无结尾换行时,引擎据此把 D 行补回。
-        let mut shell = ShellIntegration::new();
-        let offsets = shell.scan_segment(&[osc("133;C"), osc("133;D;0")].concat());
-        assert_eq!(offsets.len(), 2);
-        shell.resolve_pending(5, 0); // C,列恒 0
-        shell.resolve_pending(5, 7); // D 落在同一行第 7 列
-        let regions = shell.drain_regions();
-        assert_eq!(regions.len(), 1);
-        assert_eq!(regions[0].end_abs, 5);
-        assert_eq!(regions[0].end_col, 7);
     }
 
     #[test]

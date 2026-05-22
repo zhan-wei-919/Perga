@@ -4,13 +4,13 @@
 //! 单线程独占 `TerminalEngine` 和 `ProtocolEncoder`,所有可变状态都在这里。
 //! 外界通过 channel 进出,不持锁,不共享内部状态。
 //!
-//! Coalescing 故意不做:一个 `PtyEvent::Output` → 0~N 条 `CommandBlock` + 一个
+//! Coalescing 故意不做:一个 `PtyEvent::Output` → 0~N 条 `CommandEnd` + 一个
 //! `encode_frame`。Encoder 内部 RLE + row diff 已经把 wire size 压住,
 //! 真有性能问题再在这里加 batching。
 
 use crossbeam_channel::{select, Receiver, Sender};
 use pty::{PtyCommand, PtyEvent, PtySize};
-use terminal_engine::TerminalEngine;
+use terminal_engine::{Row, TerminalEngine};
 use terminal_input::{encode_focus, encode_key, encode_mouse, encode_paste};
 use terminal_protocol::{ExitStatus as ProtocolExitStatus, ProtocolEncoder, ProtocolEvent};
 
@@ -76,16 +76,19 @@ fn handle_pty_event(
                     return false;
                 }
             }
-            // 跑完的命令收成命令块 ── 必须在 emit_frame 之前发,前端才能在收到
-            // 对应 Patch 之前把这段内容收进 BlockList、同帧裁掉 Canvas。
-            for cmd in engine.drain_marks() {
-                let ev =
-                    encoder.encode_command_block(cmd.exit, &cmd.command_rows, &cmd.output_rows);
-                if event_tx.send(ev).is_err() {
+            // 跑完的命令 ── 在 emit_frame 之前发,前端在收到对应 Patch 之前
+            // 先记下命令结束(失败的据此打标记;autotest 据此判定命令跑完)。
+            for cmd in engine.drain_command_ends() {
+                if event_tx
+                    .send(encoder.encode_command_end(cmd.line, cmd.exit))
+                    .is_err()
+                {
                     return false;
                 }
             }
-            emit_frame(engine, encoder, event_tx)
+            let cleared = engine.scrollback_cleared();
+            let scrolled = engine.take_scrolled_rows();
+            emit_frame(engine, encoder, event_tx, &scrolled, cleared)
         }
         PtyEvent::Exited(status) => {
             // PtyEvent::Exited 是 PTY 层的最后一个事件契约(event.rs:8),
@@ -157,23 +160,28 @@ fn handle_session_input(
                 return false;
             }
             // size 变了 encoder 会发 Init(包含新 size 的 baseline);size 没变
-            // 则是一个空 Patch ── 都是合法的,消费者照样处理。
-            emit_frame(engine, encoder, event_tx)
+            // 则是一个空 Patch ── 都是合法的,消费者照样处理。resize 不滚动,
+            // 故 scrolled 为空、cleared 为 false。
+            emit_frame(engine, encoder, event_tx, &[], false)
         }
     }
 }
 
-/// 把当前 engine 状态 encode 一帧推到 event channel。返回 `false` 表示 send 失败。
+/// 把当前 engine 状态 encode 一帧推到 event channel。`scrolled` 是本帧滚出
+/// viewport 顶的行,`cleared` 标记 scrollback 被清。返回 `false` 表示 send 失败。
 fn emit_frame(
     engine: &TerminalEngine,
     encoder: &mut ProtocolEncoder,
     event_tx: &Sender<ProtocolEvent>,
+    scrolled: &[Row],
+    cleared: bool,
 ) -> bool {
     let ev = encoder.encode_frame(
         engine.snapshot(),
         engine.modes(),
         engine.title(),
-        engine.active_top(),
+        scrolled,
+        cleared,
     );
     event_tx.send(ev).is_ok()
 }

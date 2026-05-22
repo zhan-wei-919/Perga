@@ -13,7 +13,7 @@ mod shell_integration;
 mod size;
 mod snapshot;
 
-pub use engine::{ResolvedCommand, TerminalEngine};
+pub use engine::{CommandMark, TerminalEngine};
 pub use modes::{MouseReporting, TerminalModes};
 pub use size::TerminalSize;
 pub use snapshot::{

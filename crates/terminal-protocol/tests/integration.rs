@@ -20,7 +20,8 @@ fn encode_current(engine: &TerminalEngine, encoder: &mut ProtocolEncoder) -> Pro
         engine.snapshot(),
         engine.modes(),
         engine.title(),
-        engine.active_top(),
+        &[],
+        false,
     )
 }
 
@@ -296,9 +297,10 @@ fn title_clear_to_none_emits_reset() {
         engine.snapshot(),
         engine.modes(),
         Some("x".into()),
-        engine.active_top(),
+        &[],
+        false,
     ); // Init
-    let event = encoder.encode_frame(engine.snapshot(), engine.modes(), None, engine.active_top());
+    let event = encoder.encode_frame(engine.snapshot(), engine.modes(), None, &[], false);
     match event {
         ProtocolEvent::Patch { title, .. } => {
             assert_eq!(title, Some(TitleChange::Reset));

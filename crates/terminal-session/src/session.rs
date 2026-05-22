@@ -63,7 +63,8 @@ impl TerminalSession {
             engine.snapshot(),
             engine.modes(),
             engine.title(),
-            engine.active_top(),
+            &[],
+            false,
         );
         // event channel 是刚建的、capacity unbounded,这里 send 不可能失败。
         let _ = event_tx.send(baseline);

@@ -7,6 +7,10 @@
 // `canvas.measureText`。原因是 canvas measureText 在不同浏览器对 line-height
 // 处理不一致,getBoundingClientRect 给的是真实布局尺寸。
 
+/// 终端字体栈。Canvas / DOM 命令块共用,保证视觉一致。
+export const FONT_FAMILY =
+  'ui-monospace, "Cascadia Code", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace';
+
 export type CellMetrics = {
   /** Cell 宽度(CSS 像素)。一个单宽 ASCII char 占的水平距离。 */
   cellW: number;
@@ -21,6 +25,7 @@ export type CellMetrics = {
 };
 
 const PROBE_LEN = 100;
+const WIDE_PROBE_LEN = 50;
 
 /// 测量给定字体的 cell 尺寸。同步,代价 ~1 帧 reflow。
 ///
@@ -46,19 +51,37 @@ export function measureCell(fontFamily: string, fontSize: number): CellMetrics {
   // 用 'M' 而不是 'a':宽度更稳定(部分字体的 'a' 比平均值窄)。
   probe.textContent = "M".repeat(PROBE_LEN);
   document.body.appendChild(probe);
-  const rect = probe.getBoundingClientRect();
+  const latinRect = probe.getBoundingClientRect();
+  probe.textContent = "你".repeat(WIDE_PROBE_LEN);
+  const wideRect = probe.getBoundingClientRect();
   document.body.removeChild(probe);
 
   // baseline = fontSize * 0.8 是大多数 monospace 字体的近似 ascent。
   // 精确值要去解析字体 metrics(canvas measureText 的 alphabeticBaseline
   // 给得不全),Phase 1 用近似,够看就行。
   return {
-    cellW: rect.width / PROBE_LEN,
+    cellW: measuredCellWidth(
+      latinRect.width,
+      PROBE_LEN,
+      wideRect.width,
+      WIDE_PROBE_LEN,
+    ),
     cellH: lineHeight,
     baseline: Math.round(fontSize * 0.82),
     fontFamily,
     fontSize,
   };
+}
+
+export function measuredCellWidth(
+  latinWidth: number,
+  latinCount: number,
+  wideWidth: number,
+  wideCount: number,
+): number {
+  const latinCell = latinWidth / latinCount;
+  const wideCell = wideWidth / (wideCount * 2);
+  return Math.max(latinCell, wideCell);
 }
 
 /// 一个像素盒子能装下多少 cell(rows × cols)。

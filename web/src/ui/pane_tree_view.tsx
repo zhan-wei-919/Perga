@@ -142,9 +142,10 @@ const childStyle = (grow: number): Record<string, string> => ({
 });
 
 const gutterStyle = (axis: SplitAxis): Record<string, string> => ({
-  // 写死 2px ── 未来由 settings 面板可配置,见仓库根 TODO.md。
+  // 2px 固定宽度 ── 不做成可配置项(无真实需求,「不为未来写代码」);
+  // 颜色走主题 CSS 变量。
   flex: "0 0 2px",
-  background: "#333",
+  background: "var(--pg-gutter)",
   cursor: axis === "vertical" ? "col-resize" : "row-resize",
   // 触屏拖 gutter 不触发滚动(平板远程是设计目标)。
   "touch-action": "none",

@@ -1,7 +1,7 @@
 // session 状态层单测:
 // - expandRowEntries:RLE 三种 entry 的纯解码逻辑。
 // - createSessionStore:协议事件 → store 的真实生产路径
-//   (Init/Patch/Exited/CommandBlock)。createStore 在 jsdom 下能正常跑。
+//   (Init/Patch/Exited/CommandEnd + history 累积)。createStore 在 jsdom 下能跑。
 
 import { describe, expect, it } from "vitest";
 
@@ -77,6 +77,8 @@ describe("expandRowEntries", () => {
   });
 });
 
+const CURSOR = { row: 0, col: 0, visible: true, style: "block" as const };
+
 describe("createSessionStore", () => {
   it("keeps raw grid outside Solid view state across init", () => {
     const store = createSessionStore({ rows: 2, cols: 3 });
@@ -86,14 +88,10 @@ describe("createSessionStore", () => {
       type: "init",
       seq: 1,
       size: { rows: 2, cols: 3 },
-      cursor: { row: 0, col: 0, visible: true, style: "block" },
-      rows: [
-        [{ type: "text", s: "abc" }],
-        [{ type: "text", s: "xyz" }],
-      ],
+      cursor: CURSOR,
+      rows: [[{ type: "text", s: "abc" }], [{ type: "text", s: "xyz" }]],
       modes: store.state.modes,
       title: "shell",
-      active_top: 0,
     });
 
     expect(store.grid).toBe(gridRef);
@@ -110,7 +108,7 @@ describe("createSessionStore", () => {
       type: "init",
       seq: 1,
       size: { rows: 3, cols: 2 },
-      cursor: { row: 0, col: 0, visible: true, style: "block" },
+      cursor: CURSOR,
       rows: [
         [{ type: "text", s: "aa" }],
         [{ type: "text", s: "bb" }],
@@ -118,7 +116,6 @@ describe("createSessionStore", () => {
       ],
       modes: store.state.modes,
       title: null,
-      active_top: 0,
     });
 
     const gridRef = store.grid;
@@ -132,7 +129,6 @@ describe("createSessionStore", () => {
       seq: 2,
       cursor: { row: 1, col: 0, visible: true, style: "block" },
       dirty_rows: [{ index: 1, entries: [{ type: "text", s: "xy" }] }],
-      active_top: 0,
     });
 
     expect(store.grid).toBe(gridRef);
@@ -140,12 +136,6 @@ describe("createSessionStore", () => {
     expect(store.grid[1]).not.toBe(row1);
     expect(store.grid[2]).toBe(row2);
     expect(store.grid[1].map((c) => c.ch)).toEqual(["x", "y"]);
-    expect(store.state.cursor).toEqual({
-      row: 1,
-      col: 0,
-      visible: true,
-      style: "block",
-    });
     expect(store.state.rowGen[0]).toBe(baselineGen[0]);
     expect(store.state.rowGen[1]).toBe(baselineGen[1] + 1);
     expect(store.state.rowGen[2]).toBe(baselineGen[2]);
@@ -157,20 +147,18 @@ describe("createSessionStore", () => {
       type: "init",
       seq: 1,
       size: { rows: 1, cols: 1 },
-      cursor: { row: 0, col: 0, visible: true, style: "block" },
+      cursor: CURSOR,
       rows: [[{ type: "blank", count: 1 }]],
       modes: store.state.modes,
       title: null,
-      active_top: 0,
     });
     expect(store.state.title).toBeNull();
 
     store.dispatch({
       type: "patch",
       seq: 2,
-      cursor: { row: 0, col: 0, visible: true, style: "block" },
+      cursor: CURSOR,
       dirty_rows: [],
-      active_top: 0,
       title: { kind: "set", value: "hello" },
     });
     expect(store.state.title).toBe("hello");
@@ -178,39 +166,11 @@ describe("createSessionStore", () => {
     store.dispatch({
       type: "patch",
       seq: 3,
-      cursor: { row: 0, col: 0, visible: true, style: "block" },
+      cursor: CURSOR,
       dirty_rows: [],
-      active_top: 0,
       title: { kind: "reset" },
     });
     expect(store.state.title).toBeNull();
-  });
-
-  it("patch skips out-of-range dirty index, applies valid ones", () => {
-    const store = createSessionStore({ rows: 2, cols: 1 });
-    store.dispatch({
-      type: "init",
-      seq: 1,
-      size: { rows: 2, cols: 1 },
-      cursor: { row: 0, col: 0, visible: true, style: "block" },
-      rows: [[{ type: "blank", count: 1 }], [{ type: "blank", count: 1 }]],
-      modes: store.state.modes,
-      title: null,
-      active_top: 0,
-    });
-
-    store.dispatch({
-      type: "patch",
-      seq: 2,
-      cursor: { row: 0, col: 0, visible: true, style: "block" },
-      dirty_rows: [
-        { index: 99, entries: [{ type: "text", s: "x" }] },
-        { index: 0, entries: [{ type: "text", s: "y" }] },
-      ],
-      active_top: 0,
-    });
-
-    expect(store.grid[0][0].ch).toBe("y");
   });
 
   it("exited sets flag and updates seq", () => {
@@ -225,98 +185,117 @@ describe("createSessionStore", () => {
   });
 });
 
-describe("command blocks + activeTop", () => {
-  /// 起一个已 init 过的 store。
+describe("history accumulation + command_end", () => {
+  /// 起一个已 init 过的 store(全空白 grid)。
   function initedStore(rows: number, cols: number) {
     const store = createSessionStore({ rows, cols });
     store.dispatch({
       type: "init",
       seq: 1,
       size: { rows, cols },
-      cursor: { row: 0, col: 0, visible: true, style: "block" },
+      cursor: CURSOR,
       rows: Array.from({ length: rows }, () => [
         { type: "blank" as const, count: cols },
       ]),
       modes: store.state.modes,
       title: null,
-      active_top: 0,
     });
     return store;
   }
 
-  it("command_block appends a decoded block", () => {
+  it("patch scrolled_rows appends to history", () => {
     const store = initedStore(4, 10);
-    store.dispatch({
-      type: "command_block",
-      seq: 7,
-      exit: 0,
-      command: [[{ type: "text", s: "$ ls" }]],
-      output: [[{ type: "text", s: "a" }], [{ type: "text", s: "b" }]],
-    });
-
-    expect(store.state.blocks).toHaveLength(1);
-    const blk = store.state.blocks[0];
-    expect(blk.id).toBe(7);
-    expect(blk.exit).toBe(0);
-    expect(blk.folded).toBe(false);
-    expect(blk.command[0].map((c) => c.ch).join("")).toBe("$ ls");
-    expect(blk.output).toHaveLength(2);
-    expect(blk.output[0][0].ch).toBe("a");
-    expect(blk.output[1][0].ch).toBe("b");
-  });
-
-  it("command_block rows keep their own captured width (no reflow)", () => {
-    const store = initedStore(4, 10);
-    // 命令行 5 列、输出行 3 列 —— 各保持自己的宽度,不对齐到 cols=10。
-    store.dispatch({
-      type: "command_block",
-      seq: 2,
-      exit: null,
-      command: [[{ type: "text", s: "abcde" }]],
-      output: [[{ type: "text", s: "xyz" }]],
-    });
-    const blk = store.state.blocks[0];
-    expect(blk.command[0]).toHaveLength(5);
-    expect(blk.output[0]).toHaveLength(3);
-  });
-
-  it("activeTop updates from init and patch", () => {
-    const store = initedStore(6, 4);
-    expect(store.state.activeTop).toBe(0);
     store.dispatch({
       type: "patch",
       seq: 2,
-      cursor: { row: 0, col: 0, visible: true, style: "block" },
+      cursor: CURSOR,
       dirty_rows: [],
-      active_top: 3,
+      scrolled_rows: [[{ type: "text", s: "old line" }]],
     });
-    expect(store.state.activeTop).toBe(3);
+    expect(store.history.rows).toHaveLength(1);
+    expect(store.history.rows[0].abs).toBe(0);
+    expect(store.history.rows[0].cells.map((c) => c.ch).join("").trimEnd()).toBe(
+      "old line",
+    );
+    expect(store.state.historyLen).toBe(1);
   });
 
-  it("blocks survive a resize-triggered init", () => {
+  it("patch cleared empties history", () => {
     const store = initedStore(4, 10);
     store.dispatch({
-      type: "command_block",
+      type: "patch",
       seq: 2,
-      exit: 0,
-      command: [[{ type: "text", s: "$ x" }]],
-      output: [],
+      cursor: CURSOR,
+      dirty_rows: [],
+      scrolled_rows: [[{ type: "text", s: "x" }]],
     });
-    expect(store.state.blocks).toHaveLength(1);
+    expect(store.history.rows).toHaveLength(1);
+    store.dispatch({
+      type: "patch",
+      seq: 3,
+      cursor: CURSOR,
+      dirty_rows: [],
+      cleared: true,
+    });
+    expect(store.history.rows).toHaveLength(0);
+    expect(store.state.historyLen).toBe(0);
+  });
 
-    // resize → encoder 发一条新 size 的 Init。block 是冻结历史,必须保留。
+  it("history survives a resize-triggered init", () => {
+    const store = initedStore(4, 10);
+    store.dispatch({
+      type: "patch",
+      seq: 2,
+      cursor: CURSOR,
+      dirty_rows: [],
+      scrolled_rows: [[{ type: "text", s: "kept" }]],
+    });
+    expect(store.history.rows).toHaveLength(1);
+
+    // resize → encoder 发一条新 size 的 Init。history 是旧内容,必须保留。
     store.dispatch({
       type: "init",
       seq: 3,
       size: { rows: 6, cols: 12 },
-      cursor: { row: 0, col: 0, visible: true, style: "block" },
+      cursor: CURSOR,
       rows: Array.from({ length: 6 }, () => [
         { type: "blank" as const, count: 12 },
       ]),
       modes: store.state.modes,
       title: null,
-      active_top: 0,
     });
-    expect(store.state.blocks).toHaveLength(1);
+    expect(store.history.rows).toHaveLength(1);
+  });
+
+  it("failed command_end marks its line once it scrolls into history", () => {
+    const store = initedStore(4, 10);
+    // 命令在第 0 行,失败。此刻第 0 行还在活动区。
+    store.dispatch({ type: "command_end", seq: 2, exit: 1, line: 0 });
+    expect(store.history.failed.size).toBe(0);
+
+    // 第 0 行滚进 history → 标记落地,failureGen 推进。
+    store.dispatch({
+      type: "patch",
+      seq: 3,
+      cursor: CURSOR,
+      dirty_rows: [],
+      scrolled_rows: [[{ type: "text", s: "$ false" }]],
+    });
+    expect(store.history.failed.has(0)).toBe(true);
+    expect(store.state.failureGen).toBe(1);
+  });
+
+  it("successful command_end does not mark", () => {
+    const store = initedStore(4, 10);
+    store.dispatch({ type: "command_end", seq: 2, exit: 0, line: 0 });
+    store.dispatch({
+      type: "patch",
+      seq: 3,
+      cursor: CURSOR,
+      dirty_rows: [],
+      scrolled_rows: [[{ type: "text", s: "$ true" }]],
+    });
+    expect(store.history.failed.size).toBe(0);
+    expect(store.state.failureGen).toBe(0);
   });
 });

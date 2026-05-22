@@ -12,7 +12,6 @@
 // - RLE 缓存换来的窄带宽优势已经在 wire 端用过了 ── 解码后再保留 RLE 只会
 //   让渲染层做二次解码,没意义。
 
-import type { CommandBlock } from "./blocks";
 import {
   Cell,
   Color,
@@ -25,8 +24,8 @@ import {
   TerminalSize,
 } from "./protocol";
 
-/// Solid store 持有的视图状态。**不含 grid** ── grid 是普通 Cell[][] backing
-/// buffer,由 session_store 在 store 外持有,避免渲染热路径穿 Solid proxy。
+/// Solid store 持有的视图状态。**不含 grid / history** ── 它们是普通数组
+/// backing buffer,由 session_store 在 store 外持有,避免热路径穿 Solid proxy。
 export type SessionViewState = {
   size: TerminalSize;
   cursor: Cursor;
@@ -39,11 +38,10 @@ export type SessionViewState = {
   seq: number;
   // 子进程是否退出。一旦置 true,后续不再接受输入(WS 也会很快关)。
   exited: boolean;
-  // 跑完的命令块,append-only。BlockList 渲染它。
-  blocks: CommandBlock[];
-  // Canvas 活动区起始视口行 ── Canvas 只渲染 [activeTop, size.rows),
-  // [0, activeTop) 已被命令块收走。每帧由后端重算下发。
-  activeTop: number;
+  // history buffer 当前行数 ── 虚拟历史列表订阅它重算 spacer 高度。
+  historyLen: number;
+  // 失败标记 generation ── 有失败命令落标记时 +1,触发可见历史行重渲染。
+  failureGen: number;
 };
 
 export function blankCell(): Cell {
@@ -74,8 +72,8 @@ export function emptyViewState(size: TerminalSize): SessionViewState {
     rowGen: new Array(size.rows).fill(0),
     seq: 0,
     exited: false,
-    blocks: [],
-    activeTop: 0,
+    historyLen: 0,
+    failureGen: 0,
   };
 }
 

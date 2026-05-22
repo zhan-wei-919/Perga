@@ -52,17 +52,17 @@ describe("AutoBench.run", () => {
     expect(await bench.run("ls", 1)).toBeNull();
   });
 
-  it("resolves each command on its command_block event", async () => {
+  it("resolves each command on its command_end event", async () => {
     const bench = new AutoBench();
     const sent: ClientMessage[] = [];
     bench.attach(
       (msg) => {
         sent.push(msg);
-        // 模拟后端:收到回车后,命令跑完回一条 command_block。
+        // 模拟后端:收到回车后,命令跑完回一条 command_end。
         if (msg.type === "key" && msg.key.type === "enter") {
           setTimeout(() => {
             bench.onEvent(0.1);
-            bench.onCommandBlock();
+            bench.onCommandEnd();
           }, 5);
         }
       },

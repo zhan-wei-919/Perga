@@ -1,5 +1,5 @@
 //! 协议事件类型。`ProtocolEvent` 是协议表面的全部 ── 四类事件:
-//! `Init` / `Patch` / `Exited` / `CommandBlock`。
+//! `Init` / `Patch` / `Exited` / `CommandEnd`。
 //!
 //! Grid 内容用 [`RowEntry`] 做行内 RLE 压缩,见类型文档。
 
@@ -14,12 +14,10 @@ use terminal_engine::{Cell, CellAttrs, Color, Cursor, NamedColor, TerminalModes,
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProtocolEvent {
     /// 完整帧。Encoder 第一次调用 / engine resize 后发。前端拿到后**必须**
-    /// 清空本地 grid,用这一帧重建。
+    /// 清空本地 grid,用这一帧重建(history buffer 不清 —— 跨 resize 保留)。
     ///
     /// `rows.len() == size.rows`,行号 = 数组索引(positional)。每一行是一个
     /// `Vec<RowEntry>`,entries 顺序展开后必须正好填满 `size.cols` 列。
-    ///
-    /// `active_top` 含义见 [`ProtocolEvent::Patch`]。
     Init {
         seq: u64,
         size: TerminalSize,
@@ -27,20 +25,26 @@ pub enum ProtocolEvent {
         rows: Vec<Vec<RowEntry>>,
         modes: TerminalModes,
         title: Option<String>,
-        active_top: u16,
     },
     /// 增量帧。`dirty_rows` 可能为空(只光标动了一格);`modes` / `title` 变
     /// 了才带,否则 wire format 上不出现这两个 key。
     ///
-    /// `active_top`:Canvas 活动区起始视口行。前端 Canvas 只渲染
-    /// `[active_top, size.rows)`;`[0, active_top)` 的内容已被命令块收走。
-    /// **每帧必发**(后端每帧重算,从不 stale);无 shell 集成 / alt-screen
-    /// 时为 0(Canvas 全屏)。
+    /// `scrolled_rows`:本帧从 viewport 顶滚出、进入历史的行,chronological
+    /// (最早滚出在前),`RowEntry` RLE 编码。前端把它 append 进自己持有的
+    /// history buffer —— scrollback 由前端累积,后端读一次转发一次、不存历史。
+    /// 绝大多数帧为空,空时 wire 上不出现这个 key。
+    ///
+    /// `cleared`:`CSI 3J`(清 scrollback)发生 —— 前端收到先清空 history,
+    /// 再 apply `dirty_rows`。此时 `scrolled_rows` 必为空。false 时 wire 上
+    /// 不出现这个 key。
     Patch {
         seq: u64,
         cursor: Cursor,
         dirty_rows: Vec<DirtyRow>,
-        active_top: u16,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        scrolled_rows: Vec<Vec<RowEntry>>,
+        #[serde(skip_serializing_if = "is_false")]
+        cleared: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         modes: Option<TerminalModes>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,17 +52,14 @@ pub enum ProtocolEvent {
     },
     /// 子进程退出。由上层在 `PtyEvent::Exited` 时驱动 Encoder 产生。
     Exited { seq: u64, status: ExitStatus },
-    /// 一条跑完的命令收成的命令块。后端在收到 OSC 133 `D` 标记时组装并下发,
-    /// **在对应的 `Patch` 之前**。
-    ///
-    /// `command` 是命令头(提示符 + 用户输入的命令行)各行,`output` 是命令
-    /// 输出各行,都用 `RowEntry` RLE 编码。前端直接渲染成 DOM 块,不切自己的
-    /// 视口。`exit` 是退出码,shell 没带时 `None`。
-    CommandBlock {
+    /// 一条命令跑完。后端收到 OSC 133 `D` 标记时下发,**在对应的 `Patch`
+    /// 之前**。`exit` 是退出码(shell 没带时 `None`);`line` 是命令输入行的
+    /// 绝对行号 —— 前端据此在历史里给失败命令打标记。所有命令(含 exit 0)
+    /// 都发,autotest 靠它做确定性的「命令跑完」判定。
+    CommandEnd {
         seq: u64,
         exit: Option<i32>,
-        command: Vec<Vec<RowEntry>>,
-        output: Vec<Vec<RowEntry>>,
+        line: u64,
     },
 }
 
@@ -127,6 +128,10 @@ pub enum TitleChange {
 pub struct ExitStatus {
     pub code: Option<i32>,
     pub signal: Option<i32>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn is_default_fg(c: &Color) -> bool {

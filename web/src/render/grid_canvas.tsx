@@ -20,26 +20,22 @@
 // 6. **raw grid**:grid 不进入 Solid store。renderer 通过 rowGen 响应式信号
 //    得知哪几行变了,绘制时读取普通 Cell[][],避开 store proxy trap。
 //
-// 7. **activeTop 裁剪**:只渲染 [activeTop, rows) ── [0, activeTop) 的内容
-//    已被命令块(DOM)收走。activeTop 变化会改 backing size,自然触发整屏
-//    重画;grid 行 r 画在显示行 r - activeTop。
+// Canvas 渲染整个 viewport `[0, rows)`;滚出去的历史由上方虚拟 DOM 列表
+// (`history_view.tsx`)渲染。
 
-import { Component, createEffect, onCleanup, onMount } from "solid-js";
+import { Component, createEffect, onCleanup, onMount, untrack } from "solid-js";
 
 import type { Cell, CellAttr, Color, Cursor, TerminalSize } from "../state/protocol";
 import { DEFAULT_BG, DEFAULT_FG } from "../state/protocol";
 import type { SessionViewState } from "../state/session";
-import { CellMetrics, measureCell } from "./metrics";
-import { colorToCss } from "./palette";
-
-const FONT_FAMILY =
-  'ui-monospace, "Cascadia Code", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace';
+import { useSettings } from "../state/settings_context";
+import { CellMetrics, FONT_FAMILY, measureCell } from "./metrics";
+import { colorToCanvasCss } from "./palette";
+import { THEMES, type TermPalette } from "./theme";
 
 export type GridCanvasProps = {
   state: SessionViewState;
   grid: Cell[][];
-  /** CSS 像素的 font-size。Phase 1 固定 14,Phase 4 接 zoom 后由父组件传入。 */
-  fontSize?: number;
   onRenderScheduled?: () => void;
   onRenderFrame?: (durationMs: number) => void;
   /** 已 scheduled 的 RAF 在 flush 前被取消(组件卸载)。与 onRenderScheduled
@@ -58,12 +54,10 @@ export function canvasBackingSize(
   size: TerminalSize,
   metrics: Pick<CellMetrics, "cellW" | "cellH">,
   ratio: number,
-  activeTop: number,
 ): CanvasBackingSize {
-  // Canvas 只画活动区 [activeTop, rows);[0, activeTop) 归命令块。
-  const visibleRows = Math.max(0, size.rows - activeTop);
+  // Canvas 画整个 viewport;历史滚出的行由上方虚拟 DOM 列表渲染。
   const cssW = size.cols * metrics.cellW;
-  const cssH = visibleRows * metrics.cellH;
+  const cssH = size.rows * metrics.cellH;
   return {
     cssW,
     cssH,
@@ -112,16 +106,13 @@ function setFont(
 }
 
 export const GridCanvas: Component<GridCanvasProps> = (props) => {
+  const settings = useSettings();
   let canvasRef: HTMLCanvasElement | undefined;
   let metrics: CellMetrics | undefined;
   let ctx: CanvasRenderingContext2D | undefined;
   const lastDrawnGen: number[] = [];
   const pendingRows = new Set<number>();
   let lastCursor: Cursor | undefined;
-  // 上一帧画时用的 activeTop。它一变,grid 行 → 显示行的映射就整体偏移,
-  // 必须整屏重画 —— 不能只靠 backing size 判定(rows 与 activeTop 同时变、
-  // 差值不变时 backing size 不变,但映射已经变了)。
-  let lastActiveTop = -1;
   let rafId: number | undefined;
   const drawCache = newDrawCache();
 
@@ -134,9 +125,23 @@ export const GridCanvas: Component<GridCanvasProps> = (props) => {
       throw new Error("canvas 2d context not available");
     }
     ctx = c;
-    metrics = measureCell(FONT_FAMILY, props.fontSize ?? 14);
+    metrics = measureCell(FONT_FAMILY, settings.effectiveFontSize());
     syncCanvasSize();
     queueAllRows(props.state.size);
+    scheduleRender();
+  });
+
+  // zoom / 主题变化:字号与颜色都烤进了 Canvas 像素 —— 重测 metrics(字号变)
+  // 并整屏失效重画。zoom 改了 cell 尺寸但容器不变,ResizeObserver 不会 fire,
+  // 所以这里主动触发。size 用 untrack:size 变化已由下方主 effect 处理。
+  createEffect(() => {
+    const fontSize = settings.effectiveFontSize();
+    void settings.state.themeId;
+    if (!ctx || !canvasRef) return;
+    metrics = measureCell(FONT_FAMILY, fontSize);
+    lastDrawnGen.length = 0;
+    lastCursor = undefined;
+    queueAllRows(untrack(() => props.state.size));
     scheduleRender();
   });
 
@@ -146,17 +151,15 @@ export const GridCanvas: Component<GridCanvasProps> = (props) => {
 
     let needsRender = false;
     const size = props.state.size;
-    const activeTop = props.state.activeTop;
-    const target = canvasBackingSize(size, metrics, dpr(), activeTop);
-    if (!canvasBackingSizeMatches(canvasRef, target) || activeTop !== lastActiveTop) {
+    const target = canvasBackingSize(size, metrics, dpr());
+    if (!canvasBackingSizeMatches(canvasRef, target)) {
       lastDrawnGen.length = 0;
       lastCursor = undefined;
       queueAllRows(size);
       needsRender = true;
     }
 
-    // 只看活动区的行;[0, activeTop) 归命令块,它们的 rowGen 即使变了也不画。
-    for (let r = activeTop; r < size.rows; r++) {
+    for (let r = 0; r < size.rows; r++) {
       const gen = props.state.rowGen[r] ?? 0;
       const last = lastDrawnGen[r] ?? -1;
       if (gen !== last) {
@@ -220,19 +223,20 @@ export const GridCanvas: Component<GridCanvasProps> = (props) => {
     if (!ctx || !metrics || !canvasRef) return;
 
     const startedAt = performance.now();
+    // 每帧解析一次当前主题调色板,threading 进各 draw 函数 —— 不在 cell 热
+    // 循环里重复查 settings。
+    const term = THEMES[settings.state.themeId].term;
     const size = props.state.size;
-    const activeTop = props.state.activeTop;
-    const target = canvasBackingSize(size, metrics, dpr(), activeTop);
-    if (!canvasBackingSizeMatches(canvasRef, target) || activeTop !== lastActiveTop) {
+    const target = canvasBackingSize(size, metrics, dpr());
+    if (!canvasBackingSizeMatches(canvasRef, target)) {
       syncCanvasSize(target);
       lastDrawnGen.length = 0;
       lastCursor = undefined;
       queueAllRows(size);
     }
-    lastActiveTop = activeTop;
 
     const rowsToDraw = [...pendingRows]
-      .filter((row) => row >= activeTop && row < size.rows)
+      .filter((row) => row >= 0 && row < size.rows)
       .sort((a, b) => a - b);
     pendingRows.clear();
 
@@ -240,14 +244,14 @@ export const GridCanvas: Component<GridCanvasProps> = (props) => {
     for (const r of rowsToDraw) {
       const row = props.grid[r];
       if (row) {
-        drawRow(ctx, metrics, drawCache, r - activeTop, row, size.cols);
+        drawRow(ctx, metrics, drawCache, r, row, size.cols, term);
       }
       lastDrawnGen[r] = props.state.rowGen[r] ?? 0;
       drawnRows.add(r);
     }
     lastDrawnGen.length = size.rows;
 
-    drawCursor(ctx, metrics, drawnRows, activeTop);
+    drawCursor(ctx, metrics, drawnRows, term);
     props.onRenderFrame?.(performance.now() - startedAt);
   }
 
@@ -255,26 +259,25 @@ export const GridCanvas: Component<GridCanvasProps> = (props) => {
     ctx: CanvasRenderingContext2D,
     metrics: CellMetrics,
     drawnRows: Set<number>,
-    activeTop: number,
+    term: TermPalette,
   ): void {
     const cursor = props.state.cursor;
-    if (lastCursor?.visible && cursorChanged(lastCursor, cursor)) {
-      const row = props.grid[lastCursor.row];
-      const displayRow = lastCursor.row - activeTop;
-      if (row && displayRow >= 0 && !drawnRows.has(lastCursor.row)) {
-        const cell = row[lastCursor.col];
-        if (cell) {
-          drawSingleCell(ctx, metrics, drawCache, displayRow, lastCursor.col, cell, false);
-        }
+    const cleanupRow = cursorCleanupRow(lastCursor, cursor, drawnRows);
+    if (cleanupRow !== null) {
+      const row = props.grid[cleanupRow];
+      if (row) {
+        // 光标只移动时,旧 cell 常常仍是默认空白。单格 fillRect 在小数
+        // cellW 上反复覆盖会留下抗锯齿残边;重画整行避开 cell 内部接缝。
+        drawRow(ctx, metrics, drawCache, cleanupRow, row, props.state.size.cols, term);
+        lastDrawnGen[cleanupRow] = props.state.rowGen[cleanupRow] ?? 0;
+        drawnRows.add(cleanupRow);
       }
     }
     if (cursor.visible) {
       const row = props.grid[cursor.row];
-      const displayRow = cursor.row - activeTop;
-      // 光标落在命令块区(displayRow < 0)就不画 ── 它不在 Canvas 里。
-      if (row && displayRow >= 0) {
+      if (row) {
         const cell = row[cursor.col] ?? makeBlank();
-        drawSingleCell(ctx, metrics, drawCache, displayRow, cursor.col, cell, true);
+        drawSingleCell(ctx, metrics, drawCache, cursor.row, cursor.col, cell, true, term);
       }
     }
     lastCursor = { ...cursor };
@@ -282,9 +285,7 @@ export const GridCanvas: Component<GridCanvasProps> = (props) => {
 
   function syncCanvasSize(target?: CanvasBackingSize): void {
     if (!canvasRef || !metrics) return;
-    const next =
-      target ??
-      canvasBackingSize(props.state.size, metrics, dpr(), props.state.activeTop);
+    const next = target ?? canvasBackingSize(props.state.size, metrics, dpr());
     const ratio = dpr();
     canvasRef.width = next.pixelW;
     canvasRef.height = next.pixelH;
@@ -297,7 +298,8 @@ export const GridCanvas: Component<GridCanvasProps> = (props) => {
       // 不一定保留,保守起见清空。
       drawCache.lastFillStyle = "";
       drawCache.lastFont = "";
-      setFillStyle(ctx, drawCache, colorToCss(DEFAULT_BG, "bg"));
+      const term = THEMES[settings.state.themeId].term;
+      setFillStyle(ctx, drawCache, colorToCanvasCss(DEFAULT_BG, "bg", term));
       ctx.fillRect(0, 0, next.cssW, next.cssH);
     }
   }
@@ -313,6 +315,17 @@ function cursorChanged(a: Cursor, b: Cursor): boolean {
     a.visible !== b.visible ||
     a.style !== b.style
   );
+}
+
+export function cursorCleanupRow(
+  lastCursor: Cursor | undefined,
+  cursor: Cursor,
+  drawnRows: ReadonlySet<number>,
+): number | null {
+  if (!lastCursor?.visible) return null;
+  if (!cursorChanged(lastCursor, cursor)) return null;
+  if (drawnRows.has(lastCursor.row)) return null;
+  return lastCursor.row;
 }
 
 function dpr(): number {
@@ -340,7 +353,12 @@ function drawRow(
   displayRow: number,
   cells: Cell[],
   cols: number,
+  term: TermPalette,
 ): void {
+  const clear = rowBackgroundRect(displayRow, m, cols);
+  setFillStyle(ctx, cache, colorToCanvasCss(DEFAULT_BG, "bg", term));
+  ctx.fillRect(clear.x, clear.y, clear.w, clear.h);
+
   const y = displayRow * m.cellH;
   let i = 0;
   while (i < cols && i < cells.length) {
@@ -353,7 +371,7 @@ function drawRow(
     }
 
     if (cell.width === "wide") {
-      drawSingleCell(ctx, m, cache, displayRow, i, cell, false);
+      drawSingleCell(ctx, m, cache, displayRow, i, cell, false, term);
       i++;
       continue;
     }
@@ -376,15 +394,42 @@ function drawRow(
       end++;
     }
 
-    paintRun(ctx, m, cache, i, end, cells, refFg, refBg, refAttrs, y);
+    paintRun(
+      ctx,
+      m,
+      cache,
+      displayRow,
+      i,
+      end,
+      cells,
+      refFg,
+      refBg,
+      refAttrs,
+      y,
+      term,
+    );
     i = end;
   }
+}
+
+export function rowBackgroundRect(
+  displayRow: number,
+  m: Pick<CellMetrics, "cellW" | "cellH">,
+  cols: number,
+): { x: number; y: number; w: number; h: number } {
+  return {
+    x: 0,
+    y: displayRow * m.cellH,
+    w: cols * m.cellW,
+    h: m.cellH,
+  };
 }
 
 function paintRun(
   ctx: CanvasRenderingContext2D,
   m: CellMetrics,
   cache: DrawCache,
+  displayRow: number,
   start: number,
   end: number,
   cells: Cell[],
@@ -392,6 +437,7 @@ function paintRun(
   bg: Color,
   attrs: CellAttr[],
   y: number,
+  term: TermPalette,
 ): void {
   const isReverse = attrs.includes("reverse");
   const effFg = isReverse ? bg : fg;
@@ -401,7 +447,7 @@ function paintRun(
   const w = (end - start) * m.cellW;
 
   // bg
-  setFillStyle(ctx, cache, colorToCss(effBg, "bg"));
+  setFillStyle(ctx, cache, colorToCanvasCss(effBg, "bg", term));
   ctx.fillRect(x, y, w, m.cellH);
 
   if (attrs.includes("hidden")) return;
@@ -420,16 +466,22 @@ function paintRun(
     }
   }
 
-  setFillStyle(ctx, cache, colorToCss(effFg, "fg"));
+  setFillStyle(ctx, cache, colorToCanvasCss(effFg, "fg", term));
   setFont(ctx, cache, fontFor(attrs, m));
-  ctx.fillText(text, x, y + m.baseline);
+  fillTextClipped(
+    ctx,
+    text,
+    x,
+    y + m.baseline,
+    textClipRect(displayRow, start, end - start, m),
+  );
 
   if (attrs.includes("underline")) {
-    setFillStyle(ctx, cache, colorToCss(effFg, "fg"));
+    setFillStyle(ctx, cache, colorToCanvasCss(effFg, "fg", term));
     ctx.fillRect(x, y + m.baseline + 2, w, 1);
   }
   if (attrs.includes("strikethrough")) {
-    setFillStyle(ctx, cache, colorToCss(effFg, "fg"));
+    setFillStyle(ctx, cache, colorToCanvasCss(effFg, "fg", term));
     ctx.fillRect(x, y + Math.round(m.cellH / 2), w, 1);
   }
 }
@@ -444,6 +496,7 @@ function drawSingleCell(
   col: number,
   cell: Cell,
   isCursor: boolean,
+  term: TermPalette,
 ): void {
   const x = col * m.cellW;
   const y = displayRow * m.cellH;
@@ -453,18 +506,24 @@ function drawSingleCell(
   const fg = reverse ? cell.bg : cell.fg;
   const bg = reverse ? cell.fg : cell.bg;
 
-  setFillStyle(ctx, cache, colorToCss(bg, "bg"));
+  setFillStyle(ctx, cache, colorToCanvasCss(bg, "bg", term));
   ctx.fillRect(x, y, w, m.cellH);
 
   if (cell.width === "wide_spacer") return;
   if (cell.attrs.includes("hidden")) return;
 
-  setFillStyle(ctx, cache, colorToCss(fg, "fg"));
+  setFillStyle(ctx, cache, colorToCanvasCss(fg, "fg", term));
   setFont(ctx, cache, fontFor(cell.attrs, m));
 
   const text =
     cell.combining.length > 0 ? cell.ch + cell.combining.join("") : cell.ch;
-  ctx.fillText(text, x, y + m.baseline);
+  fillTextClipped(
+    ctx,
+    text,
+    x,
+    y + m.baseline,
+    textClipRect(displayRow, col, cell.width === "wide" ? 2 : 1, m),
+  );
 
   if (cell.attrs.includes("underline")) {
     ctx.fillRect(x, y + m.baseline + 2, w, 1);
@@ -504,4 +563,33 @@ function makeBlank(): Cell {
     bg: DEFAULT_BG,
     attrs: [],
   };
+}
+
+export function textClipRect(
+  displayRow: number,
+  col: number,
+  colSpan: number,
+  m: Pick<CellMetrics, "cellW" | "cellH">,
+): { x: number; y: number; w: number; h: number } {
+  return {
+    x: col * m.cellW,
+    y: displayRow * m.cellH,
+    w: colSpan * m.cellW,
+    h: m.cellH,
+  };
+}
+
+function fillTextClipped(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  clip: { x: number; y: number; w: number; h: number },
+): void {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(clip.x, clip.y, clip.w, clip.h);
+  ctx.clip();
+  ctx.fillText(text, x, y);
+  ctx.restore();
 }

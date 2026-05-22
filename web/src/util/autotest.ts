@@ -1,9 +1,9 @@
 // 自动化基准:连续执行 N 条 shell 命令,逐条测量「回车 → 命令结束」的往返耗时,
 // 跑完把汇总打印到 console。
 //
-// 命令结束的判定:OSC 133 的 `command_block` 协议事件 —— 后端在一条命令跑完时
+// 命令结束的判定:OSC 133 的 `command_end` 协议事件 —— 后端在一条命令跑完时
 // 下发,autotest 收到即确定性判定该命令结束,不再靠静默窗口轮询。前提是用户
-// source 了 shell 集成脚本;没 source 时收不到 `command_block`,命令阶段只能
+// source 了 shell 集成脚本;没 source 时收不到 `command_end`,命令阶段只能
 // 退化到 MAX_COMMAND_MS 兜底超时。
 //
 // 输入回显阶段(把命令逐字符打进去)仍用静默窗口启发式 —— 回显没有协议级的
@@ -15,7 +15,7 @@ import type { ClientMessage } from "../state/wire";
 
 // 输入回显阶段:连续这么久没有新事件,视为回显已落定。
 const QUIET_MS = 60;
-// 单条命令的硬上限,防止某条卡死拖垮整个 run。等不到 command_block 时兜底。
+// 单条命令的硬上限,防止某条卡死拖垮整个 run。等不到 command_end 时兜底。
 const MAX_COMMAND_MS = 2000;
 // 静默检测的轮询间隔。只影响「发现落定」的延迟,不影响记录的耗时数值
 // (latency 用精确的事件时间戳算,与轮询粒度无关)。
@@ -39,7 +39,7 @@ export type BenchResult = {
   timeouts: number;
   totalMs: number;
   events: number;
-  /// 「回车 → command_block 到达」往返耗时(ms)。
+  /// 「回车 → command_end 到达」往返耗时(ms)。
   latency: LatencyStats;
   /// 「回车 → 首个输出事件」耗时(ms)。
   firstEventP50: number;
@@ -75,7 +75,7 @@ export class AutoBench {
   private firstEventAt = 0;
   private lastEventAt = 0;
   private eventsInWindow = 0;
-  // 命令结束信号:onCommandBlock 置位,waitForCommandEnd 读。
+  // 命令结束信号:onCommandEnd 置位,waitForCommandEnd 读。
   private commandEnded = false;
   private commandEndedAt = 0;
 
@@ -109,8 +109,8 @@ export class AutoBench {
     }
   }
 
-  /// 收到一条 `command_block` 协议事件时由 app 调用 —— 命令执行结束的确定信号。
-  onCommandBlock(): void {
+  /// 收到一条 `command_end` 协议事件时由 app 调用 —— 命令执行结束的确定信号。
+  onCommandEnd(): void {
     if (!this.commandEnded) {
       this.commandEnded = true;
       this.commandEndedAt = performance.now();
@@ -169,7 +169,7 @@ export class AutoBench {
       await this.waitSettle(MAX_ECHO_MS, { allowNoEvent: true });
       if (this.abortCheck()) break;
 
-      // 阶段 2:回车执行,等 command_block 确定性判定命令结束。
+      // 阶段 2:回车执行,等 command_end 确定性判定命令结束。
       this.beginWindow();
       const t0 = performance.now();
       this.send({ type: "key", key: { type: "enter" } });
@@ -226,7 +226,7 @@ export class AutoBench {
     this.commandEndedAt = 0;
   }
 
-  /// 轮询等待 `command_block` 到达(命令执行结束的确定信号)。
+  /// 轮询等待 `command_end` 到达(命令执行结束的确定信号)。
   /// 返回 true = 收到;false = 到 `maxMs` 仍没收到(交互态命令 / 没 source 脚本)。
   private async waitForCommandEnd(maxMs: number): Promise<boolean> {
     for (;;) {
@@ -322,7 +322,7 @@ function logResult(r: BenchResult): void {
   );
   if (r.timeouts > 0) {
     console.warn(
-      `[perga autotest] ${r.timeouts} 条命令在 ${MAX_COMMAND_MS}ms 内没等到 command_block,` +
+      `[perga autotest] ${r.timeouts} 条命令在 ${MAX_COMMAND_MS}ms 内没等到 command_end,` +
         "汇总有偏差 ── 确认 shell 已 source 集成脚本,且命令没进交互态(vim/分页器)",
     );
   }

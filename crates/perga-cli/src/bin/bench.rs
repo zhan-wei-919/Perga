@@ -51,11 +51,14 @@ fn main() -> Result<(), String> {
     for _ in 0..20 {
         engine.feed(&payload);
         let _ = engine.drain_pending_writes();
+        let cleared = engine.scrollback_cleared();
+        let scrolled = engine.take_scrolled_rows();
         let _ = encoder.encode_frame(
             engine.snapshot(),
             engine.modes(),
             engine.title(),
-            engine.active_top(),
+            &scrolled,
+            cleared,
         );
     }
 
@@ -76,9 +79,10 @@ fn main() -> Result<(), String> {
         let snap = engine.snapshot();
         let modes = engine.modes();
         let title = engine.title();
-        let active_top = engine.active_top();
+        let cleared = engine.scrollback_cleared();
+        let scrolled = engine.take_scrolled_rows();
         let t2 = Instant::now();
-        let ev = encoder.encode_frame(snap, modes, title, active_top);
+        let ev = encoder.encode_frame(snap, modes, title, &scrolled, cleared);
         let t3 = Instant::now();
         let json = serde_json::to_string(&ev).map_err(|e| format!("serialize: {e}"))?;
         let t4 = Instant::now();

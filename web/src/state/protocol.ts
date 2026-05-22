@@ -79,29 +79,28 @@ export type ProtocolEvent =
       rows: RowEntry[][];
       modes: TerminalModes;
       title: string | null;
-      // Canvas 活动区起始视口行,含义见 patch.active_top。
-      active_top: number;
     }
   | {
       type: "patch";
       seq: number;
       cursor: Cursor;
       dirty_rows: { index: number; entries: RowEntry[] }[];
-      // Canvas 只渲染 [active_top, size.rows);[0, active_top) 已被命令块收走。
-      // 每帧必发(后端每帧重算),无 shell 集成 / alt-screen 时为 0(全屏)。
-      active_top: number;
+      // 本帧从 viewport 顶滚出、进入历史的行(chronological,最早滚出在前),
+      // RLE 编码。前端 append 进自己的 history buffer。多数帧无此字段(空)。
+      scrolled_rows?: RowEntry[][];
+      // CSI 3J 清 scrollback —— 前端收到先清空 history。多数帧无此字段。
+      cleared?: boolean;
       modes?: TerminalModes;
       title?: TitleChange;
     }
   | { type: "exited"; seq: number; status: ExitStatus }
-  // 一条跑完的命令收成的命令块,后端在 emit 对应 patch 之前发。command 是
-  // 命令头各行,output 是输出各行,都是 RowEntry RLE。前端直接渲染成 DOM 块。
+  // 一条命令跑完,后端在 emit 对应 patch 之前发。exit 是退出码,line 是命令
+  // 输入行的绝对行号 —— 前端据此在历史里给失败命令打标记。
   | {
-      type: "command_block";
+      type: "command_end";
       seq: number;
       exit: number | null;
-      command: RowEntry[][];
-      output: RowEntry[][];
+      line: number;
     };
 
 // 默认色常量。RowEntry::Text 没带 fg/bg/attrs 时落到这里。

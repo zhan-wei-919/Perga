@@ -6,18 +6,99 @@
 
 ---
 
+## 活动区主渲染从 Canvas 改成 DOM 行渲染
+
+**现状**:活动区仍由 `web/src/render/grid_canvas.tsx` 用 Canvas 2D 绘制。已经
+修过多轮残影问题(旧光标整行重画、行重绘前整行清背景、CJK 宽度测量兜底、
+`fillText` clip),但中文 / fallback 字体 / 小数 cell 宽度 / 抗锯齿边界仍然
+容易出现视觉瑕疵。历史区 `web/src/render/history_view.tsx` 已经是 DOM 行 +
+`row_segments.ts` 的 run segment 渲染,视觉和复制天然更接近浏览器文本。
+
+**已知偏差**:
+
+- Canvas 字体效果和浏览器 DOM 文本相比差,中文尤其明显。
+- 为了修 Canvas 残影不断增加局部补丁,复杂度继续上升。
+- 后续终端选择复制 / IME / 选区高亮仍要围绕 Canvas 做额外 overlay 和文本
+  拼接;如果活动区也 DOM,这些功能会更直接。
+
+**触发条件**:开始做复制系统前,优先把活动区主 renderer 切到 DOM。做法:
+
+- 新增 `web/src/render/grid_dom.tsx`,复用 `row_segments.ts`。
+- **不要** per-cell DOM。按行渲染,每行由连续同样 style 的 segment `<span>`
+  组成,类似 Canvas run-grouping。
+- 光标和 selection 高亮用绝对定位 overlay,按 `cellW/cellH` 定位。
+- `PaneLeaf` 先用常量 / 设置切换 DOM grid 与 Canvas grid;Canvas 暂留作
+  fallback / 性能对比,不要立刻删除。
+- 继续以 raw `Cell[][]` + `rowGen` 驱动,避免把 grid 放回 Solid store。
+
+**涉及**:`web/src/render/grid_dom.tsx`(新),`web/src/render/row_segments.ts`,
+`web/src/ui/pane_leaf.tsx`,`web/src/render/grid_canvas.tsx`,
+`web/src/render/metrics.ts`,`web/tests/grid_canvas.spec.ts`。
+
+---
+
+## 终端选择复制系统未实现
+
+**现状**:普通滚动终端已改成 `[历史 DOM][活动区 Canvas]`。历史区
+`web/src/render/history_view.tsx` 可以靠浏览器原生 selection 复制;活动区
+`web/src/render/grid_canvas.tsx` 是 Canvas,浏览器无法选中其中的当前 prompt /
+当前屏文字。`web/src/input/copy_shortcuts.ts` 目前只处理「已有 DOM 文本选区
+时 Ctrl/Cmd+C 走浏览器复制,否则 Ctrl+C 发 SIGINT」。
+
+**已知偏差**:
+
+- 不能复制当前活动区 Canvas 里的文本。
+- 不能跨 history + 当前屏一次性复制。
+- 复制行为还没有终端 selection overlay,也没有宽字符 / `wide_spacer` 的复制
+  文本拼接规则。
+
+**触发条件**:实现复制功能时。先做上面的 DOM active grid,再做最小闭环:
+统一 history+grid 坐标模型、鼠标拖拽选区、overlay 高亮、`Ctrl/Cmd+C` 有终端
+选区时拼纯文本写入 clipboard、无选区时 `Ctrl+C` 继续发 SIGINT。先不做双击
+选词、三击选行、块选择和拖拽自动滚动。
+
+**涉及**:`web/src/ui/pane_leaf.tsx`,`web/src/render/history_view.tsx`,
+`web/src/render/grid_canvas.tsx`,`web/src/state/history.ts`,
+`web/src/state/session_store.ts`,`web/src/input/copy_shortcuts.ts`。
+
+---
+
+## 前端鼠标上报未接入
+
+**现状**:后端 mouse 输入链路已存在:`crates/perga-server/src/wire.rs` 能解析
+`ClientMessage::Mouse`,`crates/terminal-session/src/event_loop.rs` 会调用
+`terminal-input::encode_mouse`,前端 `web/src/state/wire.ts` 也有 mouse wire
+类型。但 `web/src/ui/pane_leaf.tsx` 还没有 pointer / wheel listener 把浏览器
+鼠标事件换算成终端 `(row,col)` 后发送 `{ type:"mouse", ... }`。
+
+**已知偏差**:
+
+- `vim` / `less` / `tmux` / `htop` / `lazygit` 等 TUI 即使开启 mouse reporting,
+  也收不到前端鼠标点击、拖拽、滚轮。
+- 终端选择复制先做时可以默认接管拖拽;但后续接入 mouse reporting 后,必须在
+  `session.store.state.modes.mouse_reporting !== "off"` 时默认把鼠标交给 TUI,
+  并保留 `Shift/Alt+Drag` 这类强制前端选择的修饰键路径。
+
+**触发条件**:用户需要 TUI 鼠标操作,或终端选择复制实现到需要最终确定
+selection vs TUI mouse 的事件优先级时。
+
+**涉及**:`web/src/ui/pane_leaf.tsx`,`web/src/state/wire.ts`,
+`crates/perga-server/src/wire.rs`,`crates/terminal-session/src/event_loop.rs`,
+`crates/terminal-input/src/encoder.rs`。
+
+---
+
 ## autotest:输入回显阶段仍用静默窗口
 
-**现状**:`web/src/util/autotest.ts` 的**命令执行阶段**已改用 `command_block`
-协议事件确定性判定结束(Phase 3 落地),`run()` 循环也补了确定性单元测试。
-但**输入回显阶段**(把命令逐字符打进去、等回显落定)仍用静默窗口启发式。
+**现状**:`web/src/util/autotest.ts` 的**命令执行阶段**用 `command_end` 协议
+事件确定性判定结束,`run()` 循环也有确定性单元测试。但**输入回显阶段**(把
+命令逐字符打进去、等回显落定)仍用静默窗口启发式。
 
 **已知偏差**:回显阶段不计入耗时统计,只为把「回显」与「命令输出」两段事件
 流分开;静默窗口在这里的偏差无害,但仍是启发式。
 
 **触发条件**:若要让回显阶段也确定化。需要后端把 `command_start`(OSC 133 C)
-也作为协议事件下发 —— Phase 3 刻意只发了 `command_block`(见
-`docs/state-2026-05-22.md` §12 决策)。
+也作为协议事件下发 —— 当前只发 `command_end`。
 
 **涉及**:`web/src/util/autotest.ts`、`crates/terminal-protocol/src/event.rs`。
 
@@ -46,97 +127,20 @@
 
 ---
 
-## 视觉量 hard-code,待 settings 面板做成可配置
+## scrollback 饱和(10000 行)后历史停止增长
 
-**现状**:Phase 2 的若干视觉量直接写死在组件里:
+**现状**:引擎用 alacritty `history_size()` 的增量算「本帧滚出多少行」
+(`scroll_total` / `pending_scrolled`)。scrollback 上限是 `Config::default()`
+的 10000 行;一旦 `history_size()` 饱和在 10000,旧行被驱逐、新行进入,占用数
+不变 → 增量恒 0。于是 `take_scrolled_rows` 不再产出行,前端 history 停在 1 万
+行不再增长,`command_end.line` 也开始漂移。
 
-- `pane_tree_view.tsx` 的 split gutter(分割线)宽度 = 2px。
-- focused pane 当前**没有视觉指示** —— 原蓝色 focus ring 已按用户反馈移除,
-  多 pane 时只能靠光标活动判断焦点。
+**已知偏差**:只影响单次会话滚动超过 10000 行的情况。前端 `HISTORY_MAX` 也是
+10000 —— 即便后端供得上前端也只留最近 1 万行;真正丢的是「曾滚过但因总量超
+1 万被两端都丢弃」的中段历史。
 
-**已知偏差**:用户无法调节分割线粗细、配色,也无法选择 / 开关焦点视觉。
+**触发条件**:实测有人滚出 >10000 行、且需要回看更早历史时。根治要引擎换一个
+不依赖 `history_size` 增量的滚动计数(如直接数 viewport 滚动事件)。
 
-**触发条件**:Phase 4(Zoom + 主题 + 视觉抛光,见 `docs/state-2026-05-22.md`
-§8)落地 `web/src/ui/settings_panel.tsx` 时。
-
-**要做**:把 gutter 宽度、主题色、焦点视觉样式等收进 `Settings`,由一个控制
-面板式的设置界面调节,并持久化到 localStorage。
-
-**涉及**:`web/src/ui/pane_tree_view.tsx`、`web/src/ui/pane_leaf.tsx`。
-
----
-
-## 命令块:scrollback 饱和(10000 行)后绝对行号会漂
-
-**现状**:`TerminalEngine` 用 alacritty `history_size()` 的增量累计
-`scroll_total`,得到跨滚动稳定的绝对行号。scrollback 上限是
-`Config::default()` 的 10000 行;一旦 `history_size()` 饱和在 10000,增量恒
-0,`scroll_total` 不再推进,绝对行号开始漂移。
-
-**已知偏差**:只影响「单条命令输出 > 10000 行」或「会话已滚 >10000 行且有
-未结束的在途命令」。命令块在 command-end 才组装,所以只有在途的超长命令受
-影响;超出 10000 行的内容 alacritty 本来也已丢弃。`translate_grid_row` 的
-clamp 把取不到的行兜底成空白行,不 panic。
-
-**触发条件**:实测有人跑出 >10000 行的单条命令、且命令块明显丢行 / 错位时。
-
-**涉及**:`crates/terminal-engine/src/engine.rs`(`scroll_total`、`feed`)。
-
----
-
-## 命令块:resize 后到下一条命令之间,Canvas 与旧块短暂重叠
-
-**现状**:resize 会触发 reflow、让绝对行号失真,所以 `TerminalEngine::resize`
-重新基准化 —— `scroll_total` 归零、`last_block_end` 清空。于是 `active_top`
-回到 0、Canvas 重新渲染整个视口;而前端 BlockList 里上一批命令块还在。在
-「resize 完成」到「下一条命令 command-end」之间,最近一屏内容会同时出现在
-Canvas 和 DOM 块里。
-
-**已知偏差**:纯视觉重叠,跑下一条命令即自愈;resize 后通常很快有下一条命令,
-窗口很短。
-
-**触发条件**:实测觉得 resize 后的重叠明显碍眼时。根治需要后端在 resize 后
-能重新定位「当前活动区起点」(此时没有 mark 可依据)。
-
-**涉及**:`crates/terminal-engine/src/engine.rs`、`web/src/render/grid_canvas.tsx`。
-
----
-
-## 命令块:有 DOM 选区时 Ctrl+C 仍发 SIGINT
-
-**现状**:命令块是可选中的 DOM(`user-select: text`),但 pane 的键盘处理把
-Ctrl+C 编码成终端 SIGINT 字节并 `preventDefault`,所以选中块文本后按 Ctrl+C
-不会复制,得用右键菜单 → 复制。
-
-**已知偏差**:块文本「能选不能用 Ctrl+C 复制」,与「可选中复制」的预期有落差。
-
-**触发条件**:做选择 / 复制体验抛光时(可与 Phase 7+ 的跨界选择一并处理)。
-
-**要做**:`web/src/input/keyboard.ts` 在 `window.getSelection()` 非空时,让
-Ctrl+C 走浏览器默认复制而非发 SIGINT。
-
-**涉及**:`web/src/input/keyboard.ts`。
-
----
-
-## `clear` 不清命令块
-
-**现状**:`clear` 发 `CSI [2J` / `[3J`,清的是终端 grid;DOM 命令块独立于
-grid、不受影响。所以 `clear` 清掉了实时 Canvas,上方的历史命令块仍在 —— 与
-传统终端「`clear` 一下全清」的预期不符(半失效)。`clear` 自身不会成块:它发
-的 `CSI 3J` 会触发引擎 `advance_alacritty` 的重新基准化,丢掉在途命令。
-
-**已知偏差**:`clear` 清不掉命令块历史。Warp 靠特判 `clear` / Ctrl-L 直接
-清块,Perga 没做。
-
-**触发条件**:命令块体验打磨时。
-
-**要做**:后端在 `advance_alacritty` 检测到 `history_size` 回落(`CSI 3J`,
-= 用户要干净台面的强信号)时,除了重新基准化,再发一个新协议事件(如
-`clear_blocks`);前端收到就清空 `state.blocks`。检测点已经存在,只差把它
-变成一个协议事件。
-
-**涉及**:`crates/terminal-engine/src/engine.rs`(`advance_alacritty` 已检测
-回落)、`crates/terminal-protocol/src/event.rs`、
-`crates/terminal-session/src/event_loop.rs`、
-`web/src/state/{protocol,session_store}.ts`。
+**涉及**:`crates/terminal-engine/src/engine.rs`(`advance_alacritty`、
+`take_scrolled_rows`)。

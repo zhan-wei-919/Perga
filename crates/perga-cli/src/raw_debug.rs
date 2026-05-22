@@ -50,7 +50,8 @@ pub(crate) fn run(size: PtySize) -> Result<(), Box<dyn std::error::Error>> {
         engine.snapshot(),
         engine.modes(),
         engine.title(),
-        engine.active_top(),
+        &[],
+        false,
     ))?;
 
     let stdin_fd = io::stdin().as_raw_fd();
@@ -147,19 +148,18 @@ fn handle_event(
                     return Ok(true);
                 }
             }
-            // 与 terminal-session 的事件循环一致:命令块在 frame 之前 emit。
-            for cmd in engine.drain_marks() {
-                print_json_event(encoder.encode_command_block(
-                    cmd.exit,
-                    &cmd.command_rows,
-                    &cmd.output_rows,
-                ))?;
+            // 与 terminal-session 的事件循环一致:命令结束在 frame 之前 emit。
+            for cmd in engine.drain_command_ends() {
+                print_json_event(encoder.encode_command_end(cmd.line, cmd.exit))?;
             }
+            let cleared = engine.scrollback_cleared();
+            let scrolled = engine.take_scrolled_rows();
             print_json_event(encoder.encode_frame(
                 engine.snapshot(),
                 engine.modes(),
                 engine.title(),
-                engine.active_top(),
+                &scrolled,
+                cleared,
             ))?;
             Ok(false)
         }

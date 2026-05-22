@@ -6,18 +6,25 @@
 //! Bug B:EOF 修复曾加过「久无输出 → 判定卡死 → kill」的兜底,会把正在跑
 //!   静默长命令(`sleep`)的 shell 误杀。
 
+use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// 跑 `perga raw-debug`,喂 `input` 后关 stdin,返回 (是否在 limit 内退出, stdout)。
 fn run_raw_debug(input: &[u8], limit: Duration) -> (bool, String) {
+    let home = temp_home();
+    fs::create_dir_all(&home).expect("create temp HOME");
+
     let mut child = Command::new(env!("CARGO_BIN_EXE_perga"))
         .arg("raw-debug")
-        // 固定 bash:fish / pwsh 等不支持 shell 集成注入,不会有 command_block;
+        // 固定 bash:fish / pwsh 等不支持 shell 集成注入,不会有 command_end;
         // 那种环境下的失败与 EOF 收尾无关,会让本测试给出误导性结论。
         .env("SHELL", "/bin/bash")
+        // shell integration 需要写 $HOME/.perga/shell。测试环境的真实 HOME
+        // 可能在沙箱外只读,这里给子进程一个可写 HOME,否则不会有 OSC 133。
+        .env("HOME", &home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -39,7 +46,19 @@ fn run_raw_debug(input: &[u8], limit: Duration) -> (bool, String) {
 
     let exited = wait_with_timeout(&mut child, limit);
     let output = drain.join().expect("join stdout drain");
+    let _ = fs::remove_dir_all(&home);
     (exited, output)
+}
+
+fn temp_home() -> std::path::PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "perga-raw-debug-home-{}-{nonce}",
+        std::process::id()
+    ))
 }
 
 #[test]
@@ -54,8 +73,8 @@ fn raw_debug_terminates_on_piped_stdin() {
     );
     assert!(exited, "raw-debug 在管道 stdin EOF 后未能自行退出(卡死)");
     assert!(
-        output.contains("command_block"),
-        "raw-debug 应在退出前 emit command_block"
+        output.contains("command_end"),
+        "raw-debug 应在退出前 emit command_end"
     );
 }
 
