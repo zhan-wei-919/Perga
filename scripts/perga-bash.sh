@@ -1,7 +1,8 @@
 # Perga shell integration — OSC 133 语义提示符标记(bash)。
 #
-# Opt-in:在 ~/.bashrc 里加 `source /path/to/perga-bash.sh`。没 source 时
-# Perga 退化到纯 grid 模式,终端一切照常,只是没有命令块。
+# Perga 后端 spawn shell 时会自动注入本脚本(bash --rcfile),用户无需手动
+# 配置。本脚本也可手动 `source`(用在非 Perga 终端,或自动注入失败时回退)。
+# 未加载时 Perga 退化到纯 grid 模式,终端一切照常,只是没有命令块。
 #
 # OSC 133(FinalTerm / iTerm2 shell-integration 约定):
 #   ESC ] 133 ; A ST            prompt 开始
@@ -32,7 +33,15 @@ PS0='\033]133;C\033\\'"${PS0:-}"
 # D(命令结束 + 退出码)走 PROMPT_COMMAND。prepend `__perga_precmd` 让 $? 先于
 # 其它钩子被读到。bash 5.1+ 的 PROMPT_COMMAND 可以是数组 —— 保形 prepend,
 # 当字符串拼会把用户的数组配置毁掉(只剩首项)。
-__perga_precmd() { printf '\033]133;D;%s\033\\' "$?"; }
+#
+# `__perga_precmd` 是 prepend 的,后面还跟着用户的 hook(starship / direnv 等)。
+# 它必须 `return` 命令的真实退出码:否则函数返回值是 printf 的状态(恒 0),
+# 后续 hook 看到的 $? 全变 0,失败命令会被显示成成功。
+__perga_precmd() {
+  local __perga_exit=$?
+  printf '\033]133;D;%s\033\\' "$__perga_exit"
+  return "$__perga_exit"
+}
 case "$(declare -p PROMPT_COMMAND 2>/dev/null)" in
   "declare -a"*)
     PROMPT_COMMAND=(__perga_precmd "${PROMPT_COMMAND[@]}")

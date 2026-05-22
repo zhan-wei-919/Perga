@@ -33,7 +33,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use futures_util::stream::StreamExt;
 use futures_util::SinkExt;
-use pty::{PtyConfig, PtySize};
+use pty::{inject_shell_integration, PtyConfig, PtySize};
 use serde::Deserialize;
 use terminal_session::TerminalSession;
 
@@ -60,9 +60,11 @@ pub async fn ws_handler(
     // PtyConfig::with_default_shell 读 $SHELL,继承当前 cwd。
     // 放到 spawn_blocking 是因为 PtySession::spawn 内部会 fork + exec,
     // 严格说不算长阻塞,但仍要避开 async runtime 的 cooperative scheduler。
+    // inject_shell_integration 也写集成文件,一并留在 blocking 线程上。
     let session = tokio::task::spawn_blocking(move || -> Result<TerminalSession, String> {
         let mut cfg = PtyConfig::with_default_shell(PtySize::new(rows, cols));
         cfg.cwd = env::current_dir().ok();
+        inject_shell_integration(&mut cfg);
         TerminalSession::spawn(cfg).map_err(|e| format!("{e}"))
     })
     .await

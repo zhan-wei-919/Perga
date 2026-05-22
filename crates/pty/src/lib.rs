@@ -8,9 +8,11 @@ mod command;
 mod config;
 mod event;
 mod session;
+mod shell_inject;
 mod threads;
 
 pub use command::PtyCommand;
 pub use config::{default_shell, PtyConfig, PtySize};
 pub use event::{ExitStatus, PtyError, PtyEvent};
 pub use session::PtySession;
+pub use shell_inject::inject_shell_integration;

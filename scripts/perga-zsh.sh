@@ -1,7 +1,8 @@
 # Perga shell integration — OSC 133 语义提示符标记(zsh)。
 #
-# Opt-in:在 ~/.zshrc 里加 `source /path/to/perga-zsh.sh`。没 source 时
-# Perga 退化到纯 grid 模式,终端一切照常,只是没有命令块。
+# Perga 后端 spawn shell 时会自动注入本脚本(ZDOTDIR 重定向),用户无需手动
+# 配置。本脚本也可手动 `source`(用在非 Perga 终端,或自动注入失败时回退)。
+# 未加载时 Perga 退化到纯 grid 模式,终端一切照常,只是没有命令块。
 #
 # OSC 133(FinalTerm / iTerm2 shell-integration 约定):
 #   ESC ] 133 ; A ST            prompt 开始
@@ -20,7 +21,15 @@ __perga_emit() { printf '\033]133;%s\033\\' "$1" }
 
 # precmd:每次画 prompt 前跑,发上一条命令的 D + 退出码。
 # 必须第一个跑,否则 $? 会被别的 precmd 钩子污染 —— 故下面 prepend。
-__perga_precmd() { __perga_emit "D;$?" }
+#
+# `__perga_precmd` prepend 在用户 precmd hook 前面,必须 `return` 命令的真实
+# 退出码:否则函数返回值是 __perga_emit(printf)的状态(恒 0),后续 precmd
+# hook 看到的 $? 全变 0,失败命令会被显示成成功。
+__perga_precmd() {
+  local __perga_exit=$?
+  __perga_emit "D;$__perga_exit"
+  return $__perga_exit
+}
 
 # preexec:命令开始执行前跑。zsh 原生钩子,不需要 bash 那种 DEBUG-trap 去重。
 __perga_preexec() { __perga_emit "C" }

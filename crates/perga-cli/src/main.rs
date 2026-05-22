@@ -14,7 +14,7 @@ use std::thread;
 use crossbeam_channel::{Receiver, Sender};
 use nix::poll::{PollFd, PollFlags, PollTimeout};
 use nix::unistd;
-use pty::{PtyCommand, PtyConfig, PtyEvent, PtySession, PtySize};
+use pty::{inject_shell_integration, PtyCommand, PtyConfig, PtyEvent, PtySession, PtySize};
 use signal_hook::consts::SIGWINCH;
 use signal_hook::iterator::Signals;
 use tracing_subscriber::EnvFilter;
@@ -42,6 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut cfg = PtyConfig::with_default_shell(size);
     cfg.cwd = std::env::current_dir().ok();
+    inject_shell_integration(&mut cfg);
     // banner 用到 program 字段,需要在 cfg 被 move 进 spawn 之前打。
     print_banner(&cfg, size);
     let session = PtySession::spawn(cfg)?;

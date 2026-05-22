@@ -6,21 +6,32 @@
 
 use std::io::{self, Write};
 use std::os::fd::{AsRawFd, BorrowedFd};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::Sender;
 use nix::poll::{PollFd, PollFlags, PollTimeout};
 use nix::unistd;
-use pty::{PtyCommand, PtyConfig, PtyEvent, PtySession, PtySize};
+use pty::{inject_shell_integration, PtyCommand, PtyConfig, PtyEvent, PtySession, PtySize};
 use terminal_engine::{TerminalEngine, TerminalSize};
 use terminal_protocol::{ExitStatus as ProtocolExitStatus, ProtocolEncoder};
 
 const EVENT_TICK: Duration = Duration::from_millis(20);
+/// host stdin EOF 后补发 Ctrl-D 的间隔。
+///
+/// 只发一次会和 shell 启动抢跑:0x04 在 shell 切到 readline raw mode 之前,
+/// 被 canonical 行规当成 VEOF、组成空行 EOF 后丢掉。所以周期补发,直到某
+/// 一发 Ctrl-D 落在 shell 的空 prompt 上、shell 自己干净退出。
+///
+/// **不设输出 idle 超时**:shell 跑一条静默长命令(`sleep 30`)时同样长时间
+/// 无输出,靠「无输出」判定卡死会误杀合法命令。shell 真卡死(用户 pipe 了
+/// 死循环)就让它挂着、由用户 Ctrl-C —— 这是 debug 工具该有的诚实行为。
+const EOF_CTRL_D_RESEND: Duration = Duration::from_millis(200);
 
 /// 启动一个最小 protocol JSON debug session。
 pub(crate) fn run(size: PtySize) -> Result<(), Box<dyn std::error::Error>> {
     let mut cfg = PtyConfig::with_default_shell(size);
     cfg.cwd = std::env::current_dir().ok();
+    inject_shell_integration(&mut cfg);
 
     eprintln!(
         "[perga raw-debug] shell: {} @ {}x{}",
@@ -46,13 +57,15 @@ pub(crate) fn run(size: PtySize) -> Result<(), Box<dyn std::error::Error>> {
     // SAFETY: stdin (fd 0) is valid for the process lifetime.
     let stdin_borrowed = unsafe { BorrowedFd::borrow_raw(stdin_fd) };
     let mut stdin_open = true;
+    // host stdin EOF 后上一次补发 Ctrl-D 的时刻;None = stdin 仍开 / 还没发过。
+    let mut last_ctrl_d: Option<Instant> = None;
     let mut buf = [0u8; 4096];
 
     loop {
         let mut done = false;
         match session.event_rx().recv_timeout(EVENT_TICK) {
             Ok(event) => {
-                done = handle_event(event, &mut engine, &mut encoder, session.command_tx())?
+                done = handle_event(event, &mut engine, &mut encoder, session.command_tx())?;
             }
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => done = true,
@@ -61,7 +74,7 @@ pub(crate) fn run(size: PtySize) -> Result<(), Box<dyn std::error::Error>> {
         while !done {
             match session.event_rx().try_recv() {
                 Ok(event) => {
-                    done = handle_event(event, &mut engine, &mut encoder, session.command_tx())?
+                    done = handle_event(event, &mut engine, &mut encoder, session.command_tx())?;
                 }
                 Err(crossbeam_channel::TryRecvError::Empty) => break,
                 Err(crossbeam_channel::TryRecvError::Disconnected) => {
@@ -78,9 +91,9 @@ pub(crate) fn run(size: PtySize) -> Result<(), Box<dyn std::error::Error>> {
         if stdin_open && stdin_ready(stdin_borrowed)? {
             match unistd::read(stdin_fd, &mut buf) {
                 Ok(0) => {
+                    // Host EOF:不强制 Shutdown,改用下方周期 Ctrl-D 驱动 shell
+                    // 自己干净退出。
                     stdin_open = false;
-                    // Host EOF 对 shell 来说应当是 Ctrl-D,不是强制 Shutdown。
-                    let _ = session.command_tx().send(PtyCommand::Write(vec![0x04]));
                 }
                 Ok(n) => {
                     if session
@@ -93,6 +106,25 @@ pub(crate) fn run(size: PtySize) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Err(nix::errno::Errno::EINTR) => {}
                 Err(e) => return Err(Box::new(io::Error::from(e))),
+            }
+        }
+
+        // host stdin 已 EOF:周期性补发 Ctrl-D,直到某一发落在 shell 的空
+        // prompt 上、shell 自己退出(见 EOF_CTRL_D_RESEND)。
+        if !stdin_open {
+            let due = match last_ctrl_d {
+                None => true,
+                Some(at) => at.elapsed() >= EOF_CTRL_D_RESEND,
+            };
+            if due {
+                last_ctrl_d = Some(Instant::now());
+                if session
+                    .command_tx()
+                    .send(PtyCommand::Write(vec![0x04]))
+                    .is_err()
+                {
+                    break;
+                }
             }
         }
     }
