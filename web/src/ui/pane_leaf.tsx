@@ -151,7 +151,10 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
     if (!gridHost) return;
     const watcher = observeContainerResize(gridHost, metrics, (r, c) => {
       session.send({ type: "resize", rows: r, cols: c });
-      if (containerRef) setViewportH(containerRef.clientHeight);
+      if (containerRef) {
+        setViewportH(containerRef.clientHeight);
+        if (stickToBottom) scrollToBottom();
+      }
     });
     if (!firstSizeEffect) {
       const next = watcher.measure();
@@ -248,7 +251,8 @@ function gridHostStyle(altScreen: boolean): Record<string, string> {
   return {
     "margin-left": altScreen ? "0" : `${HISTORY_GUTTER_PX}px`,
     "min-width": "0",
-    "min-height": "100%",
+    height: "100%",
+    overflow: "hidden",
   };
 }
 

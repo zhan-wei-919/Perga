@@ -4,8 +4,7 @@
 // 树变化时 `<Switch>` 在 leaf / split 之间切换;ratio 变化只重算 flex-grow。
 //
 // gutter 拖拽**不引入新节流**:它只改 store 里的 ratio,DOM 重新 flex 后每个
-// PaneLeaf 的 `observeContainerResize`(80ms trailing debounce)自然把 resize
-// 发给各自的 WS。
+// PaneLeaf 的 `observeContainerResize`(RAF 合批)自然把 resize 发给各自的 WS。
 
 import { type Component, Match, Switch } from "solid-js";
 
