@@ -276,6 +276,9 @@ fn build_command(config: &PtyConfig) -> CommandBuilder {
     // 等终端引擎层接入 alacritty_terminal 后再核对。
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
+    for k in &config.env_remove {
+        cmd.env_remove(k);
+    }
     for (k, v) in &config.env {
         cmd.env(k, v);
     }
@@ -336,5 +339,44 @@ fn join_handles_with_timeout(handles: Vec<JoinHandle<()>>, timeout: Duration) {
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use transport::TerminalSize;
+
+    use super::*;
+    use crate::PtyConfig;
+
+    #[test]
+    fn build_command_removes_requested_env_after_terminal_defaults() {
+        let mut cfg = PtyConfig::new(PathBuf::from("/bin/sh"), TerminalSize::new(24, 80));
+        cfg.env_remove.push("COLORTERM".to_string());
+
+        let cmd = build_command(&cfg);
+
+        assert_eq!(
+            cmd.get_env("TERM").and_then(|v| v.to_str()),
+            Some("xterm-256color")
+        );
+        assert!(cmd.get_env("COLORTERM").is_none());
+    }
+
+    #[test]
+    fn build_command_env_override_wins_after_remove() {
+        let mut cfg = PtyConfig::new(PathBuf::from("/bin/sh"), TerminalSize::new(24, 80));
+        cfg.env_remove.push("TERM".to_string());
+        cfg.env
+            .push(("TERM".to_string(), "screen-256color".to_string()));
+
+        let cmd = build_command(&cfg);
+
+        assert_eq!(
+            cmd.get_env("TERM").and_then(|v| v.to_str()),
+            Some("screen-256color")
+        );
     }
 }

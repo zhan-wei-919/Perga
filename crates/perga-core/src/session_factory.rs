@@ -27,8 +27,18 @@ use crate::profiles::{to_ssh_config, HostProfile};
 pub fn open_local(size: TerminalSize, cwd: Option<PathBuf>) -> Result<TerminalSession, OpenError> {
     let mut cfg = PtyConfig::with_default_shell(size);
     cfg.cwd = cwd;
+    sanitize_local_shell_env(&mut cfg);
     inject_shell_integration(&mut cfg);
     TerminalSession::spawn_local(cfg).map_err(|e| OpenError::LocalPty(format!("{e}")))
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn sanitize_local_shell_env(cfg: &mut PtyConfig) {
+    // pnpm/npm set this while running scripts. If Perga is launched from that
+    // environment, nvm refuses to load and user-global node commands disappear
+    // from the local shell.
+    cfg.env_remove.push("npm_config_prefix".to_string());
+    cfg.env_remove.push("NPM_CONFIG_PREFIX".to_string());
 }
 
 /// 开 SSH session(connect + auth + open shell)。
@@ -46,6 +56,21 @@ pub fn open_ssh(
     // 上层统一处理。
     TerminalSession::spawn_with_transport(Box::new(ssh), size)
         .map_err(|e| OpenError::Wrap(format!("{e}")))
+}
+
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_shell_env_removes_npm_prefix_vars() {
+        let mut cfg = PtyConfig::with_default_shell(TerminalSize::new(24, 80));
+
+        sanitize_local_shell_env(&mut cfg);
+
+        assert!(cfg.env_remove.iter().any(|k| k == "npm_config_prefix"));
+        assert!(cfg.env_remove.iter().any(|k| k == "NPM_CONFIG_PREFIX"));
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

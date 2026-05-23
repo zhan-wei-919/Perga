@@ -22,13 +22,14 @@ pub(crate) fn to_portable_size(s: TerminalSize) -> portable_pty::PtySize {
 
 /// 创建一个 PTY 子进程所需要的完整描述。
 ///
-/// 调用方决定执行什么、在哪里执行、环境是什么。`env` 是「追加 / 覆盖」语义,
-/// 由 `portable-pty` 的 `CommandBuilder` 应用到继承的环境上。
+/// 调用方决定执行什么、在哪里执行、环境是什么。`env_remove` 先删继承环境,
+/// `env` 再追加 / 覆盖,由 `portable-pty` 的 `CommandBuilder` 应用。
 #[derive(Debug, Clone)]
 pub struct PtyConfig {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
+    pub env_remove: Vec<String>,
     pub env: Vec<(String, String)>,
     pub size: TerminalSize,
 }
@@ -39,6 +40,7 @@ impl PtyConfig {
             program,
             args: Vec::new(),
             cwd: None,
+            env_remove: Vec::new(),
             env: Vec::new(),
             size,
         }

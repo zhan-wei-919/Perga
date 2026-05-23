@@ -24,6 +24,7 @@ fn pty_config(program: &str, args: &[&str]) -> PtyConfig {
         program: PathBuf::from(program),
         args: args.iter().map(|s| s.to_string()).collect(),
         cwd: None,
+        env_remove: Vec::new(),
         env: Vec::new(),
         size: TerminalSize::new(24, 80),
     }
