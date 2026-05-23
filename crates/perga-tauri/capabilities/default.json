@@ -4,6 +4,10 @@
   "description": "Default capability for the Perga main window — 仅放行 Perga 自带的 custom command 与必需的核心权限。",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-start-dragging",
+    "core:window:allow-toggle-maximize"
   ]
 }

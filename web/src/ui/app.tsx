@@ -39,6 +39,11 @@ import { PerfOverlay } from "./perf_overlay";
 import { ProfilePicker } from "./profile_picker";
 import { SettingsPanel } from "./settings_panel";
 import { TabBar } from "./tab_bar";
+import {
+  WINDOW_CHROME_HEIGHT,
+  WindowChrome,
+  shouldShowWindowChrome,
+} from "./window_chrome";
 
 export const App: Component = () => {
   const perfTracker = new PerfTracker(shouldEnablePerf());
@@ -90,6 +95,11 @@ export const App: Component = () => {
   // 我们在 SolidJS 响应式系统里使用 async 探测结果。
   const [platform] = createResource(detectPlatform);
   const isMobile = (): boolean => platform()?.kind === "mobile";
+  const showWindowChrome = (): boolean => shouldShowWindowChrome(platform());
+  const activeTabTitle = (): string => {
+    const tab = workspace.state.tabs[workspace.state.activeTab];
+    return tab ? workspace.tabTitle(tab.id) : "shell";
+  };
 
   // 首次启动:移动端 → 自动弹 picker(picker 内部根据 0 profile 自动进入
   // HostForm 引导)。createEffect 跟着 platform 解析触发,只点燃一次:第二次
@@ -137,8 +147,11 @@ export const App: Component = () => {
   return (
     <SettingsContext.Provider value={settings}>
       <div style={rootStyle}>
+        <Show when={showWindowChrome()}>
+          <WindowChrome title={activeTabTitle()} />
+        </Show>
         <div
-          style={tabHoverZoneStyle(tabBarVisible())}
+          style={tabHoverZoneStyle(tabBarVisible(), showWindowChrome())}
           onMouseEnter={() => setTabHovering(true)}
           onMouseLeave={() => setTabHovering(false)}
         >
@@ -212,10 +225,13 @@ const paneAreaStyle: Record<string, string> = {
 };
 
 /// 顶部 hover 区:隐藏时只留 8px 触发条;展开时覆盖完整 tab 栏高度。
-function tabHoverZoneStyle(visible: boolean): Record<string, string> {
+function tabHoverZoneStyle(
+  visible: boolean,
+  hasWindowChrome: boolean,
+): Record<string, string> {
   return {
     position: "absolute",
-    top: "0",
+    top: hasWindowChrome ? `${WINDOW_CHROME_HEIGHT}px` : "0",
     left: "0",
     right: "0",
     height: visible ? "30px" : "8px",
