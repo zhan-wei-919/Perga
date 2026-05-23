@@ -16,6 +16,19 @@ import type { Cell, CellAttr, Color, Cursor, TerminalSize } from "../state/proto
 import { DEFAULT_BG, DEFAULT_FG } from "../state/protocol";
 import { useSettings } from "../state/settings_context";
 import type { SessionViewState } from "../state/session";
+import {
+  blockElementModel,
+  isBlockElementGlyph,
+  isBlockElementRun,
+} from "./block_elements";
+import {
+  boxDrawingModel,
+  boxDrawingStemRect,
+  isBoxDrawingGlyph,
+  isBoxDrawingRun,
+  type BoxDrawingStem,
+  type BoxDrawingWeight,
+} from "./box_drawing";
 import { type CellMetrics, FONT_FAMILY, measureCell } from "./metrics";
 import { colorToDomCss } from "./palette";
 import { segmentStyle } from "./row_segments";
@@ -321,6 +334,54 @@ export function segmentsForGridRow(
       continue;
     }
 
+    if (isBoxDrawingCell(cell)) {
+      const xCell = i;
+      const fg = cell.fg;
+      const bg = cell.bg;
+      const attrs = cell.attrs;
+      let text = cell.ch;
+      let widthCells = 1;
+      i++;
+
+      while (i < end) {
+        const next = cellAt(cells, i);
+        if (!isBoxDrawingCell(next)) break;
+        if (!sameColor(fg, next.fg)) break;
+        if (!sameColor(bg, next.bg)) break;
+        if (!sameAttrs(attrs, next.attrs)) break;
+        text += next.ch;
+        widthCells++;
+        i++;
+      }
+
+      out.push({ xCell, text, fg, bg, attrs, widthCells });
+      continue;
+    }
+
+    if (isBlockElementCell(cell)) {
+      const xCell = i;
+      const fg = cell.fg;
+      const bg = cell.bg;
+      const attrs = cell.attrs;
+      let text = cell.ch;
+      let widthCells = 1;
+      i++;
+
+      while (i < end) {
+        const next = cellAt(cells, i);
+        if (!isBlockElementCell(next)) break;
+        if (!sameColor(fg, next.fg)) break;
+        if (!sameColor(bg, next.bg)) break;
+        if (!sameAttrs(attrs, next.attrs)) break;
+        text += next.ch;
+        widthCells++;
+        i++;
+      }
+
+      out.push({ xCell, text, fg, bg, attrs, widthCells });
+      continue;
+    }
+
     const xCell = i;
     const fg = cell.fg;
     const bg = cell.bg;
@@ -333,6 +394,7 @@ export function segmentsForGridRow(
       const next = cellAt(cells, i);
       if (next.width !== "single") break;
       if (isSkippableBlank(next)) break;
+      if (isBoxDrawingCell(next) || isBlockElementCell(next)) break;
       if (!sameColor(fg, next.fg)) break;
       if (!sameColor(bg, next.bg)) break;
       if (!sameAttrs(attrs, next.attrs)) break;
@@ -421,7 +483,6 @@ export function cursorOverlayModel(
 
 function segmentElement(seg: GridRowSegment, metrics: CellMetrics): HTMLSpanElement {
   const span = document.createElement("span");
-  span.textContent = seg.text;
   Object.assign(span.style, {
     position: "absolute",
     left: `${seg.xCell * metrics.cellW}px`,
@@ -446,7 +507,79 @@ function segmentElement(seg: GridRowSegment, metrics: CellMetrics): HTMLSpanElem
   for (const [key, value] of Object.entries(css)) {
     span.style.setProperty(key, value);
   }
+  if (isBoxDrawingRun(seg.text)) {
+    renderBoxDrawingRun(span, seg.text, metrics);
+  } else if (isBlockElementRun(seg.text)) {
+    renderBlockElementRun(span, seg.text, metrics);
+  } else {
+    span.textContent = seg.text;
+  }
   return span;
+}
+
+function renderBlockElementRun(
+  span: HTMLSpanElement,
+  text: string,
+  metrics: CellMetrics,
+): void {
+  const frag = document.createDocumentFragment();
+  [...text].forEach((ch, index) => {
+    const model = blockElementModel(ch);
+    if (!model) return;
+    const cellLeft = index * metrics.cellW;
+    for (const rect of model.rects) {
+      const block = document.createElement("span");
+      Object.assign(block.style, {
+        position: "absolute",
+        left: `${cellLeft + rect.x * metrics.cellW}px`,
+        top: `${rect.y * metrics.cellH}px`,
+        width: `${rect.w * metrics.cellW}px`,
+        height: `${rect.h * metrics.cellH}px`,
+        display: "block",
+        background: "currentColor",
+        pointerEvents: "none",
+      });
+      frag.appendChild(block);
+    }
+  });
+  span.replaceChildren(frag);
+}
+
+function renderBoxDrawingRun(
+  span: HTMLSpanElement,
+  text: string,
+  metrics: CellMetrics,
+): void {
+  const frag = document.createDocumentFragment();
+  [...text].forEach((ch, index) => {
+    const model = boxDrawingModel(ch);
+    if (!model) return;
+    for (const stem of model.stems) {
+      frag.appendChild(boxDrawingStemElement(stem, model.weight, metrics, index));
+    }
+  });
+  span.replaceChildren(frag);
+}
+
+function boxDrawingStemElement(
+  stem: BoxDrawingStem,
+  weight: BoxDrawingWeight,
+  metrics: CellMetrics,
+  cellIndex: number,
+): HTMLSpanElement {
+  const line = document.createElement("span");
+  const rect = boxDrawingStemRect(stem, weight, metrics, cellIndex);
+  Object.assign(line.style, {
+    position: "absolute",
+    display: "block",
+    background: "currentColor",
+    pointerEvents: "none",
+    left: `${rect.left}px`,
+    top: `${rect.top}px`,
+    width: `${rect.width}px`,
+    height: `${rect.height}px`,
+  });
+  return line;
 }
 
 function visibleEnd(
@@ -463,6 +596,22 @@ function visibleEnd(
 
 function glyphForCell(cell: Cell): string {
   return cell.combining.length > 0 ? cell.ch + cell.combining.join("") : cell.ch;
+}
+
+function isBoxDrawingCell(cell: Cell): boolean {
+  return (
+    cell.width === "single" &&
+    cell.combining.length === 0 &&
+    isBoxDrawingGlyph(cell.ch)
+  );
+}
+
+function isBlockElementCell(cell: Cell): boolean {
+  return (
+    cell.width === "single" &&
+    cell.combining.length === 0 &&
+    isBlockElementGlyph(cell.ch)
+  );
 }
 
 function cellAt(cells: Cell[], index: number): Cell {

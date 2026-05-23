@@ -124,6 +124,25 @@ describe("segmentsForGridRow", () => {
     const segs = segmentsForGridRow([cell("e", { combining: [ACUTE] })], 1);
     expect(segs[0].text).toBe("e" + ACUTE);
   });
+
+  it("splits box drawing glyphs from same-style text runs", () => {
+    const row = Array.from("╭── Claude ─╮", (ch) => cell(ch));
+
+    expect(debugGridRowSegments(row, row.length)).toEqual([
+      { xCell: 0, text: "╭──", widthCells: 3 },
+      { xCell: 4, text: "Claude", widthCells: 6 },
+      { xCell: 11, text: "─╮", widthCells: 2 },
+    ]);
+  });
+
+  it("splits block element glyphs from same-style text runs", () => {
+    const row = Array.from(" crab ▀▄█ ", (ch) => cell(ch));
+
+    expect(debugGridRowSegments(row, row.length)).toEqual([
+      { xCell: 1, text: "crab", widthCells: 4 },
+      { xCell: 6, text: "▀▄█", widthCells: 3 },
+    ]);
+  });
 });
 
 describe("cursorOverlayModel", () => {
