@@ -9,6 +9,11 @@
 //!
 //! tokio runtime 是 server 专属的 side-pool;PTY / engine / session 全部
 //! 仍跑在 sync 线程,只在 [`bridge`] 这一处缝合(CLAUDE.md §运行时模型)。
+//!
+//! **平台**:仅桌面(Linux / macOS / Windows)。直接调 `perga_core::open_local`,
+//! 不做 mobile target gate ── 移动端生产入口是 `perga-tauri` 的 IPC,不会拉到
+//! 本 crate。`cargo check --workspace --target aarch64-linux-android` 不在
+//! 保证范围;mobile build 命令明确用 `-p perga-tauri`。
 
 mod bridge;
 mod error;

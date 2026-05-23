@@ -60,13 +60,20 @@ export const App: Component = () => {
   const applyShortcut = (action: WorkspaceAction): void => {
     switch (action.kind) {
       case "split":
-        workspace.splitFocused(action.axis);
+        // split 在 v1 永远开本地 shell(`crates/web/state/workspace.ts` 的
+        // `splitFocused` 注释:不继承 profile)。mobile / unknown 上本地不可达
+        // ── shortcut no-op 防止键盘用户在 SSH tab 里 split 出炸的 local pane。
+        // "在 SSH 远端再开一个嵌套 SSH 子会话"留给后续(workspace.ts §makeTab)。
+        if (isLocalAllowed()) workspace.splitFocused(action.axis);
         break;
       case "close":
         workspace.closeFocused();
         break;
       case "newTab":
-        workspace.newTab();
+        // local 不允许时(mobile / 解析窗口内的 unknown)转弹 picker,
+        // desktop 维持「直接开本地 shell」的旧 UX。
+        if (isLocalAllowed()) workspace.newTab();
+        else setPickerOpen(true);
         break;
       case "switchTab":
         workspace.switchTab(action.index);
@@ -95,23 +102,39 @@ export const App: Component = () => {
   // 我们在 SolidJS 响应式系统里使用 async 探测结果。
   const [platform] = createResource(detectPlatform);
   const isMobile = (): boolean => platform()?.kind === "mobile";
+  // 本地 shell 是否允许的二元 gate ── unknown 平台保守视作"不允许",避免
+  // 解析窗口内用户点 `+ 新建 shell` / 触发 newTab shortcut 在 mobile build
+  // 上意外开出无法 spawn 的 local pane。只有 explicitly desktop 才放行。
+  const isLocalAllowed = (): boolean => platform()?.kind === "desktop";
   const showWindowChrome = (): boolean => shouldShowWindowChrome(platform());
   const activeTabTitle = (): string => {
     const tab = workspace.state.tabs[workspace.state.activeTab];
     return tab ? workspace.tabTitle(tab.id) : "shell";
   };
 
-  // 首次启动:移动端 → 自动弹 picker(picker 内部根据 0 profile 自动进入
-  // HostForm 引导)。createEffect 跟着 platform 解析触发,只点燃一次:第二次
-  // 触发时 pickerOpen 已是 true,人为关掉后 effect 也不再重开。
-  let firstRunHandled = false;
+  // `createWorkspace` 数据层永远允许空(关到底就 `tabs: []`)。平台行为差异
+  // 在这层用一个 reactive effect 维护:
+  // - desktop:UI 不变量"tabs ≥ 1" ── effect 看到 0 就 newTab,等价于初次
+  //   启动开 default shell + close-last respawn。
+  // - mobile:第一次解析时弹 picker(picker 内部 0 profile 自动进 HostForm
+  //   引导);后续 close 到空时**不**自动 respawn ── 本地 shell 不可达,
+  //   EmptyState 的"添加远程主机"按钮是用户重入路径。
+  let pickerShownOnce = false;
   createEffect(() => {
-    if (firstRunHandled) return;
-    if (!platform()) return; // resource 还没解析
-    if (isMobile()) {
-      setPickerOpen(true);
+    const p = platform();
+    if (!p) return; // resource 还没解析
+    if (p.kind === "mobile") {
+      if (!pickerShownOnce) {
+        setPickerOpen(true);
+        pickerShownOnce = true;
+      }
+      return;
     }
-    firstRunHandled = true;
+    // desktop:tabs.length 是 Solid store 读,自动建立订阅 ── close-last → 0
+    // 触发 effect 重跑 → newTab → 1。两次 effect 跑完稳定。
+    if (workspace.state.tabs.length === 0) {
+      workspace.newTab();
+    }
   });
 
   // tab 栏自动隐藏:顶部 8px 是触发区,hover 后展开成 30px 的 tab 区;
@@ -160,7 +183,7 @@ export const App: Component = () => {
             onOpenSettings={() => setSettingsOpen(true)}
             visible={tabBarVisible()}
             onPlusOverride={
-              isMobile() ? () => setPickerOpen(true) : undefined
+              isLocalAllowed() ? undefined : () => setPickerOpen(true)
             }
           />
         </div>
@@ -168,6 +191,13 @@ export const App: Component = () => {
           <Show
             when={workspace.state.tabs[workspace.state.activeTab]}
             keyed
+            fallback={
+              <EmptyState
+                showLocal={isLocalAllowed()}
+                onNewLocal={() => workspace.newTab()}
+                onOpenPicker={() => setPickerOpen(true)}
+              />
+            }
           >
             {(tab) => <PaneTreeView tab={tab} workspace={workspace} />}
           </Show>
@@ -201,6 +231,64 @@ export const App: Component = () => {
       </div>
     </SettingsContext.Provider>
   );
+};
+
+/// 空 workspace 占位:tab 栏在 hover 才出现,空态下用户找不到 `+`,
+/// 这里直接给两个入口按钮。`showLocal` 在 mobile 上 false ── 本地 shell
+/// 在移动 target 不可达,只留远程主机入口。
+const EmptyState: Component<{
+  showLocal: boolean;
+  onNewLocal: () => void;
+  onOpenPicker: () => void;
+}> = (props) => (
+  <div style={emptyStateStyle}>
+    <div style={emptyStateInnerStyle}>
+      <Show when={props.showLocal}>
+        <button
+          type="button"
+          style={emptyStateButtonStyle}
+          onClick={props.onNewLocal}
+        >
+          + 新建 shell
+        </button>
+      </Show>
+      <button
+        type="button"
+        style={emptyStateButtonStyle}
+        onClick={props.onOpenPicker}
+      >
+        添加远程主机
+      </button>
+    </div>
+  </div>
+);
+
+const emptyStateStyle: Record<string, string> = {
+  position: "absolute",
+  inset: "0",
+  display: "flex",
+  "align-items": "center",
+  "justify-content": "center",
+  color: "var(--pg-fg-dim)",
+  "font-family": "ui-monospace, monospace",
+  "font-size": "13px",
+};
+
+const emptyStateInnerStyle: Record<string, string> = {
+  display: "flex",
+  "flex-direction": "column",
+  gap: "10px",
+  "min-width": "200px",
+};
+
+const emptyStateButtonStyle: Record<string, string> = {
+  background: "transparent",
+  color: "var(--pg-fg-dim)",
+  border: "1px solid var(--pg-tabbar-border)",
+  padding: "10px 16px",
+  cursor: "pointer",
+  "font-family": "inherit",
+  "font-size": "inherit",
 };
 
 const rootStyle: Record<string, string> = {

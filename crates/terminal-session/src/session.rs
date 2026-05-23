@@ -9,6 +9,7 @@ use std::panic::AssertUnwindSafe;
 use std::thread::{self, JoinHandle};
 
 use crossbeam_channel::{Receiver, Sender};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use pty::{PtyConfig, PtySession};
 use terminal_engine::TerminalEngine;
 use terminal_input::{KeyEvent, MouseEvent};
@@ -43,6 +44,10 @@ pub struct TerminalSession {
 
 impl TerminalSession {
     /// 起本地 PTY backend 并组装会话(Phase 0 ~ 4R 的唯一路径)。
+    ///
+    /// 移动 target 上不存在 —— `pty` crate 在 Android / iOS 编译为空,
+    /// 没有 `PtyConfig` / `PtySession` 类型可用。调用方必须自己 cfg-gate。
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn spawn_local(config: PtyConfig) -> Result<Self, SessionError> {
         let size = config.size;
         let pty = PtySession::spawn(config)

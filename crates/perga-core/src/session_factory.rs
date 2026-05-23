@@ -3,13 +3,16 @@
 //! 两条入口:
 //! - [`open_local`]:本地 PTY,fork+exec 默认 shell,注入 shell 集成。caller
 //!   传 cwd(server 一般传 `current_dir()`,Tauri 一般传 None 让 shell 自决)。
+//!   **仅桌面 target 可用** —— `pty` crate 在 mobile target 编译为空。
 //! - [`open_ssh`]:走 `crates/ssh` 建 SSH 会话,known_hosts 路径由 caller 决定。
+//!   桌面 / 移动通用,SSH 是 mobile 的主路径。
 //!
 //! 两条入口都是**同步阻塞**,内部完成 connect / fork。caller 通常用
 //! `spawn_blocking`(server 走 tokio,Tauri 走 std::thread)把它隔离到独立线程。
 
 use std::path::PathBuf;
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use pty::{inject_shell_integration, PtyConfig};
 use ssh::SshSession;
 use terminal_session::TerminalSession;
@@ -20,6 +23,7 @@ use crate::profiles::{to_ssh_config, HostProfile};
 /// 开本地 shell session。
 ///
 /// `cwd`:子进程工作目录。`None` 让 portable-pty 走默认(继承父进程)。
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn open_local(size: TerminalSize, cwd: Option<PathBuf>) -> Result<TerminalSession, OpenError> {
     let mut cfg = PtyConfig::with_default_shell(size);
     cfg.cwd = cwd;
@@ -46,6 +50,8 @@ pub fn open_ssh(
 
 #[derive(Debug, thiserror::Error)]
 pub enum OpenError {
+    /// 本地 PTY 错误。仅桌面 target 可达 —— mobile 上 `open_local` 整体不存在。
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     #[error("local pty: {0}")]
     LocalPty(String),
     #[error("ssh: {0}")]

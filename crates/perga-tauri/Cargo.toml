@@ -9,6 +9,14 @@ description = "Perga 桌面 / 移动端 Tauri 应用入口"
 name = "perga"
 path = "src/main.rs"
 
+# Tauri mobile(Android / iOS)通过 cdylib 加载入口,desktop bin 走 rlib。
+# `staticlib` 留给 iOS 静态归档,`cdylib` 是 Android `System.loadLibrary` 加载点,
+# `rlib` 保留 bin 引用 lib 的 Rust 路径。crate-type 顺序无关。
+[lib]
+name = "perga_lib"
+path = "src/lib.rs"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

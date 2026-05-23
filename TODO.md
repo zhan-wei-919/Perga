@@ -97,40 +97,41 @@ selection vs TUI mouse 的事件优先级时。
 
 ---
 
-## 移动端打包目标(Android / iOS)
+## 移动端打包 — Android init / signing / 真机
 
-**现状**:Phase 6 v1 完成了**前端**移动端 UX hooks(`web/src/util/platform.ts`
-+ `web/src/ui/profile_picker.tsx` + tab_bar 的 `+` 分支),并通过
-`?platform=mobile` 在浏览器里能验证。但**实际 Android / iOS bundle 没打**——
-v1 只打 Linux。
+**现状**:**代码层闭口已完成**。`crates/pty` 在 Android/iOS target 整 crate
+cfg-gate(`portable-pty` + `libc` 仅桌面);`terminal-session::spawn_local`、
+`perga-core::session_factory::{open_local, OpenError::LocalPty}` 跟随 gate;
+`perga-tauri::session_open` 的 `None =>` arm 在移动 target 返回
+`local_unavailable:` 错误;前端 `createWorkspace` 起步 `tabs: []`,App 层按
+platform 决定是 newTab(desktop)还是 setPickerOpen(mobile)。
+`perga-tauri` 已拆 `lib.rs::run()` + `[lib] crate-type = ["staticlib","cdylib","rlib"]`,
+Android cdylib 加载点就绪。
 
-**已知偏差**:
+**剩余偏差**:
 
-- 工作区启动还是会无条件创建一个 default local-shell tab(`createWorkspace`
-  里 `tabs: [makeTab()]` 硬编)。在 Tauri mobile 上 `portable-pty` 不可用,
-  这个 default tab 会失败。当前用 `forceSetup=true` 的 picker modal 抢覆盖,
-  但 default tab 仍是僵尸。
-- `crates/pty` / `crates/ssh` 没加 `#[cfg(not(any(target_os = "android",
-  target_os = "ios")))]` gate;`cargo check --target aarch64-linux-android` 会
-  在 portable-pty 上炸。
+- 没跑过 `cargo tauri android init`,Gradle / Xcode 工程文件未生成。
+- ring/aws-lc-sys 在 Android target 需要 NDK `aarch64-linux-android-clang` +
+  cross-compile 配置,目前 host 上没装 NDK。
+- 没有 Android keystore;没有 Apple Developer Program 账号。
+- 没在真机 / 模拟器跑过。
 
 **触发条件**:实际要在平板上发版时。
 
 **要做**:
 
-1. **PTY cfg gate**:`crates/pty` 改成只在桌面 target 编;`terminal-session::spawn_local`
-   也跟着 gate;`perga-core::session_factory::open_local` 在 mobile target 直接
-   `unreachable!()` 或 panic。
-2. **Workspace 初始 tab**:平台是 mobile 时不预创建 default tab,workspace
-   `tabs` 起步为空,picker 用户选一个 profile 才 newTab。需要解开"必有一
-   tab"的 invariant 或允许 zero-tab 启动态。
-3. **Android signing** + **iOS Apple Developer**:走 `cargo tauri android init` /
-   `cargo tauri ios init`,准备 keystore 与签名 profile。
-4. **真机调试**:`cargo tauri android dev` / `ios dev` 走 USB / 模拟器。
+1. **`cargo tauri android init`**:生成 `gen/android` Gradle 项目骨架;`tauri.conf.json`
+   补 mobile entry。
+2. **NDK 链接配置**:装 Android NDK,配 `~/.cargo/config.toml` 的
+   `[target.aarch64-linux-android]` linker / ar / clang;ring / aws-lc-sys 通过
+   `CC_aarch64-linux-android` 找到 NDK 工具链。
+3. **Android signing**:`keytool` 生成 release keystore,`tauri.conf.json` 的
+   `bundle.android.signingConfig` 配上。
+4. **iOS path**:`cargo tauri ios init`,Apple Developer 账号 + Xcode signing profile。
+5. **真机调试**:`cargo tauri android dev` / `ios dev` 走 USB / 模拟器烟雾测试 ──
+   首屏弹 picker → 添加 profile → SSH 进远端 shell。
 
-**涉及**:`crates/pty/Cargo.toml` + lib.rs(cfg gate)、`crates/perga-core/src/session_factory.rs`、
-`crates/perga-tauri/`(Android / iOS init)、`web/src/state/workspace.ts`(zero-tab
-初始态)。
+**涉及**:`crates/perga-tauri/tauri.conf.json`、`~/.cargo/config.toml`(NDK target)。
 
 ---
 
@@ -241,21 +242,3 @@ host key + agent stub),`SshSession::spawn` 连过去跑一条 echo,验 round-tri
 **涉及**:`crates/perga-tauri/{tauri.conf.json,icons/}`、`web/`(打包流程)。
 
 ---
-
-## Default-tab 启动 vs Tauri mobile
-
-**现状**:`createWorkspace()` 同步初始化时强制 `tabs: [makeTab()]`,即
-"workspace 永远 ≥1 tab" invariant。Phase 6 v1 移动端 UX 通过 `forceSetup`
-picker 抢一个覆盖层,但底下那个 local-shell tab 仍然存在,在真 Android / iOS
-build 上会 spawn 失败。
-
-**触发条件**:同上 "移动端打包目标"。要等到第一次跑 mobile bundle、看到
-default tab 失败时一并改。
-
-**要做**:
-- 选项 A:解开 "≥1 tab" invariant,允许 zero-tab 启动态;picker 选 profile
-  后才 `newTabWithProfile`。
-- 选项 B:`createWorkspace(initialProfileId?)` 接收 init,平台层在 mobile
-  形态下不传 → 不预创建。需要异步初始化(picker → 选 profile → 装载)。
-
-**涉及**:`web/src/state/workspace.ts`、`web/src/ui/app.tsx`。

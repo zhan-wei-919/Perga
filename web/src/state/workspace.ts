@@ -7,8 +7,10 @@
 // - session 归属在 workspace,不在组件:split 重建树时 Solid 可能 remount leaf
 //   组件,但 leaf id(及其 PTY)必须存活 ── 把 socket 绑在数据而非组件上。
 //
-// 不变量:workspace 永远 ≥1 tab,每 tab 永远 ≥1 活 pane。任何会破坏它的操作
-// 改为 respawn(决策 B,数据模型无空态)。
+// 不变量:`tabs` 允许空(关闭最后 tab / 移动端 cold-start);非空时每 tab
+// 永远 ≥1 活 pane。"永远有 default tab"的旧不变量由 App 层维护:desktop
+// 在 platform 解析后补一个 newTab(),mobile 留空 + 弹 picker。数据模型不
+// 背平台知识 ── workspace 只保证空 / 非空两种合法状态的内部一致性。
 
 import { createStore, produce } from "solid-js/store";
 
@@ -43,9 +45,9 @@ export type Tab = {
 };
 
 export type WorkspaceState = {
-  /** 不变量:非空。 */
+  /** 允许空(关闭最后 tab / 移动端 cold-start);非空时每 tab ≥1 活 pane。 */
   tabs: Tab[];
-  /** 不变量:0 <= activeTab < tabs.length。 */
+  /** 不变量:`tabs` 非空时 0 <= activeTab < tabs.length;空时取值无意义。 */
   activeTab: number;
 };
 
@@ -90,7 +92,8 @@ export type Workspace = {
   sessionFor(id: LeafId): LeafSession;
   /** active tab 的 focused leaf 标题,空则 fallback "shell"。 */
   tabTitle(tabId: string): string;
-  focusedSession(): LeafSession;
+  /** 空 tabs 状态返回 `undefined`;调用方决定是 no-op 还是补 newTab。 */
+  focusedSession(): LeafSession | undefined;
 };
 
 // store 在拿到第一帧 Init 前需要一个合法 size;PaneLeaf 挂载测量后真实尺寸
@@ -209,8 +212,10 @@ export function createWorkspace(
     return { id: `tab-${tabSeq++}`, tree: leafTree(leaf), focusedLeaf: leaf };
   };
 
+  // tabs 起步为空 ── App 在 platform 解析后决定是否补 default tab。
+  // 这样 desktop / mobile 走同一条数据路径,平台策略只在 UI 层表达。
   const [store, setStore] = createStore<WorkspaceState>({
-    tabs: [makeTab()],
+    tabs: [],
     activeTab: 0,
   });
   state = store;
@@ -221,8 +226,11 @@ export function createWorkspace(
     return session;
   };
 
-  const focusedSession = (): LeafSession =>
-    sessionFor(store.tabs[store.activeTab].focusedLeaf);
+  const focusedSession = (): LeafSession | undefined => {
+    const tab = store.tabs[store.activeTab];
+    if (!tab) return undefined;
+    return sessionFor(tab.focusedLeaf);
+  };
 
   const newTab = (): void => {
     const tab = makeTab();
@@ -249,41 +257,37 @@ export function createWorkspace(
     if (idx < 0) return;
     const victims = leafIds(store.tabs[idx].tree);
 
-    if (store.tabs.length === 1) {
-      // 最后一个 tab:不进空态,respawn 一个全新 tab(决策 B 的 tab 层版本)。
-      const fresh = makeTab();
-      for (const leaf of victims) disposeLeaf(leaf);
-      setStore(
-        produce((s) => {
-          s.tabs[0] = fresh;
-          s.activeTab = 0;
-        }),
-      );
-      return;
-    }
-
+    // 关到底就进空态,不 respawn。App 层的空态占位 UI 给用户重新进入路径
+    // (desktop "+ 新建 shell" / mobile "添加远程主机")。
     for (const leaf of victims) disposeLeaf(leaf);
     setStore(
       produce((s) => {
         s.tabs.splice(idx, 1);
-        if (s.activeTab > idx) s.activeTab -= 1;
-        if (s.activeTab > s.tabs.length - 1) s.activeTab = s.tabs.length - 1;
+        if (s.tabs.length === 0) {
+          s.activeTab = 0;
+        } else {
+          if (s.activeTab > idx) s.activeTab -= 1;
+          if (s.activeTab > s.tabs.length - 1) s.activeTab = s.tabs.length - 1;
+        }
       }),
     );
   };
 
   const switchTab = (index: number): void => {
+    if (store.tabs.length === 0) return;
     const clamped = Math.max(0, Math.min(index, store.tabs.length - 1));
     setStore("activeTab", clamped);
   };
 
   const nextTab = (): void => {
+    if (store.tabs.length === 0) return; // 避免 `% 0`
     setStore("activeTab", (store.activeTab + 1) % store.tabs.length);
   };
 
   const splitFocused = (axis: SplitAxis): void => {
     const idx = store.activeTab;
     const tab = store.tabs[idx];
+    if (!tab) return; // 空 tabs:no-op
     const edit = treeSplitFocused(tab.tree, tab.focusedLeaf, axis, createLeaf());
     setStore(
       produce((s) => {
@@ -296,6 +300,7 @@ export function createWorkspace(
   const closeFocused = (): void => {
     const idx = store.activeTab;
     const tab = store.tabs[idx];
+    if (!tab) return; // 空 tabs:no-op
 
     if (leafCount(tab.tree) > 1) {
       // 普通情况:tab 内折叠 split。
@@ -319,14 +324,17 @@ export function createWorkspace(
   const focusNeighbor = (dir: FocusDir): void => {
     const idx = store.activeTab;
     const tab = store.tabs[idx];
+    if (!tab) return; // 空 tabs:no-op
     const next = treeFocusNeighbor(tab.tree, tab.focusedLeaf, dir);
     if (next !== tab.focusedLeaf) setStore("tabs", idx, "focusedLeaf", next);
   };
 
   const focusLeaf = (id: LeafId): void => {
     const idx = store.activeTab;
+    const tab = store.tabs[idx];
+    if (!tab) return; // 空 tabs:no-op
     // 只接受属于 active tab 的 leaf ── 跨 tab focus 是无意义状态。
-    if (!hasLeaf(store.tabs[idx].tree, id)) return;
+    if (!hasLeaf(tab.tree, id)) return;
     setStore("tabs", idx, "focusedLeaf", id);
   };
 
@@ -350,10 +358,11 @@ export function createWorkspace(
   };
 
   // autotest 通过这层间接始终路由到当前 focused leaf ── attach 一次即可,
-  // 焦点切换时无需重接。
+  // 焦点切换时无需重接。空 tabs 下 focusedSession() 返回 undefined:send 静默,
+  // exited 视作 true(等价"没有活会话",bench 等待循环自然退出)。
   autoBench?.attach(
-    (msg) => focusedSession().send(msg),
-    () => focusedSession().store.state.exited,
+    (msg) => focusedSession()?.send(msg),
+    () => focusedSession()?.store.state.exited ?? true,
   );
 
   return {

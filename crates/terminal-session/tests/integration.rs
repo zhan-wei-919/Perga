@@ -3,6 +3,11 @@
 //! 起真实 PTY(`/bin/echo` / `/bin/cat`)驱动整条 backend 流水线 ── PTY 字节
 //! → Engine → ProtocolEncoder → `ProtocolEvent` 消费者,以及反方向 SessionInput
 //! → terminal-input → TransportCommand。**不**用 mock,protocol 契约一变就立刻打到。
+//!
+//! 整个文件依赖 `pty::PtyConfig` 起本地 PTY —— mobile target 上 `pty` crate
+//! 编译为空,所以集成测试只在桌面 target 跑。
+
+#![cfg(not(any(target_os = "android", target_os = "ios")))]
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

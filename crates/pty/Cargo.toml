@@ -6,10 +6,16 @@ publish.workspace = true
 
 [dependencies]
 transport = { path = "../transport" }
-portable-pty.workspace = true
 crossbeam-channel.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+
+# portable-pty / libc 是 unix-only:Android / iOS target 上既链接不上,
+# 应用沙箱也不允许 fork 用户进程。整个 pty crate 在移动 target 上由
+# `src/lib.rs` 顶部的 `#![cfg(...)]` 编译为空,这里把宿主依赖一并移除,
+# 避免 mobile target 的依赖解析阶段先于源码 cfg 触发。
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+portable-pty.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
