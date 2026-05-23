@@ -10,7 +10,10 @@ path = "src/main.rs"
 
 [dependencies]
 # 内嵌 PTY / engine / 协议层 ── server 只是把它们透传到 WebSocket。
+transport = { path = "../transport" }
 pty = { path = "../pty" }
+# SSH backend(通过 `?profile=<id>` 触发)。
+ssh = { path = "../ssh" }
 terminal-engine = { path = "../terminal-engine", features = ["serde"] }
 terminal-protocol = { path = "../terminal-protocol" }
 # 入站消息复用 KeyEvent / MouseEvent 的 Deserialize,所以打开 serde feature。
@@ -21,6 +24,9 @@ terminal-session = { path = "../terminal-session" }
 tokio.workspace = true
 axum.workspace = true
 futures-util.workspace = true
+
+# Host profile 文件解析(`~/.perga/hosts.toml`)。
+toml.workspace = true
 
 # Sync↔async 桥需要 crossbeam Receiver 端的类型。
 crossbeam-channel.workspace = true
@@ -37,6 +43,8 @@ tracing-subscriber.workspace = true
 # 集成测试:作为 WS 客户端连测试用 server。
 tokio-tungstenite.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "net", "time", "io-util"] }
+# profiles 单测用临时 toml 文件,不污染 ~/.perga/hosts.toml。
+tempfile.workspace = true
 
 [lints]
 workspace = true

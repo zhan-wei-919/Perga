@@ -5,13 +5,18 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::Receiver;
-use pty::{PtyCommand, PtyConfig, PtyError, PtyEvent, PtySession, PtySize};
+use pty::{PtyConfig, PtyError, PtySession};
+use transport::{TerminalSize, TransportCommand, TransportEvent};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
 
-fn collect_until<F>(rx: &Receiver<PtyEvent>, predicate: F, timeout: Duration) -> Vec<PtyEvent>
+fn collect_until<F>(
+    rx: &Receiver<TransportEvent>,
+    predicate: F,
+    timeout: Duration,
+) -> Vec<TransportEvent>
 where
-    F: Fn(&PtyEvent) -> bool,
+    F: Fn(&TransportEvent) -> bool,
 {
     let mut events = Vec::new();
     let deadline = Instant::now() + timeout;
@@ -30,10 +35,10 @@ where
     events
 }
 
-fn aggregate_output(events: &[PtyEvent]) -> Vec<u8> {
+fn aggregate_output(events: &[TransportEvent]) -> Vec<u8> {
     let mut buf = Vec::new();
     for ev in events {
-        if let PtyEvent::Output(data) = ev {
+        if let TransportEvent::Output(data) = ev {
             buf.extend_from_slice(data);
         }
     }
@@ -41,7 +46,7 @@ fn aggregate_output(events: &[PtyEvent]) -> Vec<u8> {
 }
 
 fn config_for(program: &str, args: &[&str]) -> PtyConfig {
-    let mut cfg = PtyConfig::new(PathBuf::from(program), PtySize::new(24, 80));
+    let mut cfg = PtyConfig::new(PathBuf::from(program), TerminalSize::new(24, 80));
     cfg.args = args.iter().map(|s| (*s).to_string()).collect();
     cfg
 }
@@ -51,7 +56,7 @@ fn echo_roundtrip() {
     let session = PtySession::spawn(config_for("/bin/echo", &["hello"])).expect("spawn echo");
     let events = collect_until(
         session.event_rx(),
-        |ev| matches!(ev, PtyEvent::Exited(_)),
+        |ev| matches!(ev, TransportEvent::Exited(_)),
         DEFAULT_TIMEOUT,
     );
     let out = aggregate_output(&events);
@@ -61,11 +66,15 @@ fn echo_roundtrip() {
         String::from_utf8_lossy(&out)
     );
     let exited = events.iter().find_map(|ev| match ev {
-        PtyEvent::Exited(s) => Some(*s),
+        TransportEvent::Exited(s) => Some(*s),
         _ => None,
     });
     let status = exited.expect("expected Exited event");
-    assert!(status.success, "echo exit status should be success");
+    assert_eq!(
+        status.code,
+        Some(0),
+        "echo exit status should be success, got {status:?}"
+    );
 }
 
 #[test]
@@ -73,14 +82,14 @@ fn cat_write_then_shutdown() {
     let session = PtySession::spawn(config_for("/bin/cat", &[])).expect("spawn cat");
     session
         .command_tx()
-        .send(PtyCommand::Write(b"abc\n".to_vec()))
+        .send(TransportCommand::Write(b"abc\n".to_vec()))
         .expect("send write");
 
     // 等 cat 把 echo 回的字节流读出来
     let echo_events = collect_until(
         session.event_rx(),
         |ev| match ev {
-            PtyEvent::Output(d) => d.windows(3).any(|w| w == b"abc"),
+            TransportEvent::Output(d) => d.windows(3).any(|w| w == b"abc"),
             _ => false,
         },
         DEFAULT_TIMEOUT,
@@ -94,19 +103,20 @@ fn cat_write_then_shutdown() {
 
     session
         .command_tx()
-        .send(PtyCommand::Shutdown)
+        .send(TransportCommand::Shutdown)
         .expect("send shutdown");
     let tail = collect_until(
         session.event_rx(),
-        |ev| matches!(ev, PtyEvent::Exited(_)),
+        |ev| matches!(ev, TransportEvent::Exited(_)),
         DEFAULT_TIMEOUT,
     );
     assert!(
-        tail.iter().any(|ev| matches!(ev, PtyEvent::Exited(_))),
+        tail.iter()
+            .any(|ev| matches!(ev, TransportEvent::Exited(_))),
         "should receive Exited after shutdown, got {tail:?}"
     );
     assert!(
-        !tail.iter().any(|ev| matches!(ev, PtyEvent::Error(_))),
+        !tail.iter().any(|ev| matches!(ev, TransportEvent::Error(_))),
         "EOF on normal close should not surface as Error, got {tail:?}"
     );
 }
@@ -115,13 +125,13 @@ fn cat_write_then_shutdown() {
 fn pty_size_reaches_child_24x80() {
     let session = PtySession::spawn({
         let mut cfg = config_for("/bin/sh", &["-c", "stty size"]);
-        cfg.size = PtySize::new(24, 80);
+        cfg.size = TerminalSize::new(24, 80);
         cfg
     })
     .expect("spawn sh");
     let events = collect_until(
         session.event_rx(),
-        |ev| matches!(ev, PtyEvent::Exited(_)),
+        |ev| matches!(ev, TransportEvent::Exited(_)),
         DEFAULT_TIMEOUT,
     );
     let out = String::from_utf8_lossy(&aggregate_output(&events)).into_owned();
@@ -135,13 +145,13 @@ fn pty_size_reaches_child_24x80() {
 fn pty_size_reaches_child_40x120() {
     let session = PtySession::spawn({
         let mut cfg = config_for("/bin/sh", &["-c", "stty size"]);
-        cfg.size = PtySize::new(40, 120);
+        cfg.size = TerminalSize::new(40, 120);
         cfg
     })
     .expect("spawn sh");
     let events = collect_until(
         session.event_rx(),
-        |ev| matches!(ev, PtyEvent::Exited(_)),
+        |ev| matches!(ev, TransportEvent::Exited(_)),
         DEFAULT_TIMEOUT,
     );
     let out = String::from_utf8_lossy(&aggregate_output(&events)).into_owned();
@@ -220,16 +230,16 @@ fn no_output_lost_before_exit() {
     let deadline = Instant::now() + Duration::from_secs(10);
     while let Some(left) = deadline.checked_duration_since(Instant::now()) {
         match session.event_rx().recv_timeout(left) {
-            Ok(PtyEvent::Output(data)) => {
+            Ok(TransportEvent::Output(data)) => {
                 assert!(!saw_exit, "Output arrived AFTER Exited — protocol violated");
                 total += data.len();
             }
-            Ok(PtyEvent::Exited(status)) => {
-                assert!(status.success, "child should exit 0");
+            Ok(TransportEvent::Exited(status)) => {
+                assert_eq!(status.code, Some(0), "child should exit 0, got {status:?}");
                 saw_exit = true;
                 break;
             }
-            Ok(PtyEvent::Error(e)) => panic!("unexpected fatal error: {e:?}"),
+            Ok(TransportEvent::Error(e)) => panic!("unexpected fatal error: {e:?}"),
             Err(_) => break,
         }
     }
@@ -240,7 +250,7 @@ fn no_output_lost_before_exit() {
     );
 }
 
-/// Regression:resize 失败(或正常)都**不应**触发 `PtyEvent::Error`。Error 的
+/// Regression:resize 失败(或正常)都**不应**触发 `TransportEvent::Error`。Error 的
 /// 契约是「致命」,曾经 resize 失败时走 Error,会让 CLI 误判会话已死。
 #[test]
 fn resize_does_not_emit_fatal_error() {
@@ -250,26 +260,28 @@ fn resize_does_not_emit_fatal_error() {
     for &(rows, cols) in &[(40u16, 120u16), (10, 40), (1, 1), (50, 200)] {
         session
             .command_tx()
-            .send(PtyCommand::Resize(PtySize::new(rows, cols)))
+            .send(TransportCommand::Resize(TerminalSize::new(rows, cols)))
             .expect("send resize");
     }
 
     // 写一字节,等它回来,确认写通路依旧活着。
     session
         .command_tx()
-        .send(PtyCommand::Write(b"x\n".to_vec()))
+        .send(TransportCommand::Write(b"x\n".to_vec()))
         .expect("send write");
 
     let events = collect_until(
         session.event_rx(),
         |ev| match ev {
-            PtyEvent::Output(d) => d.contains(&b'x'),
+            TransportEvent::Output(d) => d.contains(&b'x'),
             _ => false,
         },
         DEFAULT_TIMEOUT,
     );
     assert!(
-        !events.iter().any(|ev| matches!(ev, PtyEvent::Error(_))),
+        !events
+            .iter()
+            .any(|ev| matches!(ev, TransportEvent::Error(_))),
         "resize must never surface as a fatal Error event, got {events:?}"
     );
     let echoed = aggregate_output(&events);

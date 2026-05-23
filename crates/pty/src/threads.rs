@@ -17,9 +17,10 @@ use std::io::{self, Read, Write};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
+use transport::{TransportCommand, TransportError, TransportEvent};
 
-use crate::command::PtyCommand;
-use crate::event::{PtyError, PtyEvent};
+use crate::config::to_portable_size;
+use crate::event::{exit_status_from_portable, PtyError};
 use crate::session::SIGKILL_GRACE;
 
 /// waiter 的 try_wait 轮询间隔。对终端用户而言 50ms 不可感知;
@@ -27,7 +28,7 @@ use crate::session::SIGKILL_GRACE;
 /// 不存在 reap / 复用的竞争窗口。
 const WAITER_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-/// 读 PTY master 字节,封成 `PtyEvent::Output` 发到事件总线。
+/// 读 PTY master 字节,封成 `TransportEvent::Output` 发到事件总线。
 ///
 /// 关闭路径上 Linux 通常返回 `EIO`,macOS 通常 `Ok(0)`;两种都是「子进程
 /// 退出后 master 端被 hang up」的正常信号,**不**当作错误上报 ——
@@ -37,7 +38,7 @@ const WAITER_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// reader 已经排完缓冲区。这是「Exited 是最后事件」的关键。
 pub(crate) fn reader_loop(
     mut reader: Box<dyn Read + Send>,
-    event_tx: Sender<PtyEvent>,
+    event_tx: Sender<TransportEvent>,
     done_tx: Sender<()>,
 ) {
     let mut buf = vec![0u8; 4096];
@@ -45,7 +46,10 @@ pub(crate) fn reader_loop(
         match reader.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
-                if event_tx.send(PtyEvent::Output(buf[..n].to_vec())).is_err() {
+                if event_tx
+                    .send(TransportEvent::Output(buf[..n].to_vec()))
+                    .is_err()
+                {
                     // consumer 已经断开;不存在「向虚空写日志」的必要。
                     break;
                 }
@@ -53,7 +57,10 @@ pub(crate) fn reader_loop(
             Err(e) if is_closed_pty_error(&e) => break,
             Err(e) => {
                 tracing::warn!(error = %e, "pty.reader.io_error");
-                let _ = event_tx.send(PtyEvent::Error(PtyError::Read(e)));
+                let _ = event_tx.send(TransportEvent::Error(TransportError::Read(format!(
+                    "{}",
+                    PtyError::Read(e)
+                ))));
                 break;
             }
         }
@@ -61,10 +68,10 @@ pub(crate) fn reader_loop(
     let _ = done_tx.send(());
 }
 
-/// 收 `PtyCommand`,把字节写进 master / 调 resize / 触发 shutdown。
+/// 收 `TransportCommand`,把字节写进 master / 调 resize / 触发 shutdown。
 ///
 /// 错误分类:
-/// - `Write` 失败 = 写入通路断了,继续收 Write 没意义 → 发 `PtyEvent::Error` 后退出。
+/// - `Write` 失败 = 写入通路断了,继续收 Write 没意义 → 发 `TransportEvent::Error` 后退出。
 /// - `Resize` 失败 = 窗口竞争 / 内核临时拒绝,**不致命** → 只 warn,**不**发 event。
 /// - `Shutdown` = 调用方主动要求关闭:同步发 SIGHUP(给 shell 写 history 的机会),
 ///   然后通过 `shutdown_tx` 通知 waiter 启动 grace 计时器。**不**在 writer 里
@@ -75,26 +82,29 @@ pub(crate) fn writer_loop(
     mut writer: Box<dyn Write + Send>,
     mut hangup_killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
     shutdown_tx: Sender<()>,
-    cmd_rx: Receiver<PtyCommand>,
-    event_tx: Sender<PtyEvent>,
+    cmd_rx: Receiver<TransportCommand>,
+    event_tx: Sender<TransportEvent>,
 ) {
     while let Ok(cmd) = cmd_rx.recv() {
         match cmd {
-            PtyCommand::Write(data) => {
+            TransportCommand::Write(data) => {
                 if let Err(e) = writer.write_all(&data) {
                     tracing::warn!(error = %e, "pty.writer.write_failed");
-                    let _ = event_tx.send(PtyEvent::Error(PtyError::Write(e)));
+                    let _ = event_tx.send(TransportEvent::Error(TransportError::Write(format!(
+                        "{}",
+                        PtyError::Write(e)
+                    ))));
                     break;
                 }
             }
-            PtyCommand::Resize(size) => {
-                if let Err(e) = master.resize(size.into()) {
+            TransportCommand::Resize(size) => {
+                if let Err(e) = master.resize(to_portable_size(size)) {
                     tracing::warn!(error = %e, "pty.writer.resize_failed");
                     // 不发 event:resize 失败非致命,后续 resize 可重试,
                     // write 通路应保持可用。
                 }
             }
-            PtyCommand::Shutdown => {
+            TransportCommand::Shutdown => {
                 if let Err(e) = hangup_killer.kill() {
                     // 子进程可能已经自己退了,kill 报 ESRCH 是正常事件。
                     tracing::debug!(error = %e, "pty.writer.hangup_after_shutdown");
@@ -123,7 +133,7 @@ pub(crate) fn writer_loop(
 pub(crate) fn waiter_loop(
     mut child: Box<dyn portable_pty::Child + Send + Sync>,
     reader_done: Receiver<()>,
-    event_tx: Sender<PtyEvent>,
+    event_tx: Sender<TransportEvent>,
     shutdown_rx: Receiver<()>,
     pid: Option<libc::pid_t>,
     pgid: Option<libc::pid_t>,
@@ -178,10 +188,13 @@ pub(crate) fn waiter_loop(
     let _ = reader_done.recv();
 
     let event = match wait_result {
-        Ok(status) => PtyEvent::Exited(status.into()),
+        Ok(status) => TransportEvent::Exited(exit_status_from_portable(status)),
         Err(e) => {
             tracing::warn!(error = %e, "pty.waiter.wait_failed");
-            PtyEvent::Error(PtyError::Wait(e.to_string()))
+            TransportEvent::Error(TransportError::Wait(format!(
+                "{}",
+                PtyError::Wait(e.to_string())
+            )))
         }
     };
     let _ = event_tx.send(event);

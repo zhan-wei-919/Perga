@@ -1,7 +1,7 @@
 //! PTY → protocol JSON 调试模式。
 //!
 //! 这里故意不进 raw mode,也不接前端:宿主 stdin 以行模式进 PTY,
-//! `PtyEvent::Output` 经 `terminal-engine` 和 `terminal-protocol` 变成
+//! `TransportEvent::Output` 经 `terminal-engine` 和 `terminal-protocol` 变成
 //! pretty JSON。这样能单独看后端会发给前端的协议消息。
 
 use std::io::{self, Write};
@@ -11,9 +11,10 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::Sender;
 use nix::poll::{PollFd, PollFlags, PollTimeout};
 use nix::unistd;
-use pty::{inject_shell_integration, PtyCommand, PtyConfig, PtyEvent, PtySession, PtySize};
-use terminal_engine::{TerminalEngine, TerminalSize};
-use terminal_protocol::{ExitStatus as ProtocolExitStatus, ProtocolEncoder};
+use pty::{inject_shell_integration, PtyConfig, PtySession};
+use terminal_engine::TerminalEngine;
+use terminal_protocol::ProtocolEncoder;
+use transport::{TerminalSize, TransportCommand, TransportEvent};
 
 const EVENT_TICK: Duration = Duration::from_millis(20);
 /// host stdin EOF 后补发 Ctrl-D 的间隔。
@@ -28,7 +29,7 @@ const EVENT_TICK: Duration = Duration::from_millis(20);
 const EOF_CTRL_D_RESEND: Duration = Duration::from_millis(200);
 
 /// 启动一个最小 protocol JSON debug session。
-pub(crate) fn run(size: PtySize) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run(size: TerminalSize) -> Result<(), Box<dyn std::error::Error>> {
     let mut cfg = PtyConfig::with_default_shell(size);
     cfg.cwd = std::env::current_dir().ok();
     inject_shell_integration(&mut cfg);
@@ -44,7 +45,7 @@ pub(crate) fn run(size: PtySize) -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let session = PtySession::spawn(cfg)?;
-    let mut engine = TerminalEngine::new(TerminalSize::new(size.rows, size.cols));
+    let mut engine = TerminalEngine::new(size);
     let mut encoder = ProtocolEncoder::new();
     print_json_event(encoder.encode_frame(
         engine.snapshot(),
@@ -99,7 +100,7 @@ pub(crate) fn run(size: PtySize) -> Result<(), Box<dyn std::error::Error>> {
                 Ok(n) => {
                     if session
                         .command_tx()
-                        .send(PtyCommand::Write(buf[..n].to_vec()))
+                        .send(TransportCommand::Write(buf[..n].to_vec()))
                         .is_err()
                     {
                         break;
@@ -121,7 +122,7 @@ pub(crate) fn run(size: PtySize) -> Result<(), Box<dyn std::error::Error>> {
                 last_ctrl_d = Some(Instant::now());
                 if session
                     .command_tx()
-                    .send(PtyCommand::Write(vec![0x04]))
+                    .send(TransportCommand::Write(vec![0x04]))
                     .is_err()
                 {
                     break;
@@ -135,16 +136,16 @@ pub(crate) fn run(size: PtySize) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn handle_event(
-    event: PtyEvent,
+    event: TransportEvent,
     engine: &mut TerminalEngine,
     encoder: &mut ProtocolEncoder,
-    command_tx: &Sender<PtyCommand>,
+    command_tx: &Sender<TransportCommand>,
 ) -> io::Result<bool> {
     match event {
-        PtyEvent::Output(data) => {
+        TransportEvent::Output(data) => {
             engine.feed(&data);
             for pending in engine.drain_pending_writes() {
-                if command_tx.send(PtyCommand::Write(pending)).is_err() {
+                if command_tx.send(TransportCommand::Write(pending)).is_err() {
                     return Ok(true);
                 }
             }
@@ -163,16 +164,13 @@ fn handle_event(
             ))?;
             Ok(false)
         }
-        PtyEvent::Exited(status) => {
-            let code = i32::try_from(status.code)
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "exit code overflow"))?;
-            print_json_event(encoder.encode_exited(ProtocolExitStatus {
-                code: Some(code),
-                signal: None,
-            }))?;
+        TransportEvent::Exited(status) => {
+            // status 已是 transport::ExitStatus(== terminal_protocol::ExitStatus),
+            // 不需要翻译。
+            print_json_event(encoder.encode_exited(status))?;
             Ok(true)
         }
-        PtyEvent::Error(err) => {
+        TransportEvent::Error(err) => {
             eprintln!("[perga raw-debug] error: {err}");
             Ok(true)
         }

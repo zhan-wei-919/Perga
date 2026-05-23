@@ -38,6 +38,10 @@ export type SessionViewState = {
   seq: number;
   // 子进程是否退出。一旦置 true,后续不再接受输入(WS 也会很快关)。
   exited: boolean;
+  // 会话**根本没起来**(SSH connect / auth / open shell 失败、profile 不存在)。
+  // reason 是可读字符串,pane 据此渲染错误 banner;`exited` 同时也置 true
+  // 让输入路径冻结。null = 正常路径。
+  sessionError: string | null;
   // history buffer 当前行数 ── 虚拟历史列表订阅它重算 spacer 高度。
   historyLen: number;
   // 失败标记 generation ── 有失败命令落标记时 +1,触发可见历史行重渲染。
@@ -72,6 +76,7 @@ export function emptyViewState(size: TerminalSize): SessionViewState {
     rowGen: new Array(size.rows).fill(0),
     seq: 0,
     exited: false,
+    sessionError: null,
     historyLen: 0,
     failureGen: 0,
   };

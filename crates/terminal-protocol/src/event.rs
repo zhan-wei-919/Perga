@@ -5,6 +5,7 @@
 
 use serde::Serialize;
 use terminal_engine::{Cell, CellAttrs, Color, Cursor, NamedColor, TerminalModes, TerminalSize};
+pub use transport::ExitStatus;
 
 /// 协议事件。`tag = "type"` 模式,前端按 `msg.type` switch。
 ///
@@ -61,6 +62,15 @@ pub enum ProtocolEvent {
         exit: Option<i32>,
         line: u64,
     },
+    /// **会话在开始前就失败了**。专用于 SSH 路径:服务端在 WS upgrade 之后
+    /// 跑 connect + auth + open_shell,失败时下发这个事件 + 关 WS。前端 pane
+    /// 拿到后显示错误 banner;不发 `Exited` —— 因为子进程 / 远端 shell 根本
+    /// 没起来,语义上不是"退出"而是"从未开始"。
+    ///
+    /// 不复用 `Exited` 的理由:`Exited` 的 wire 形状是 `{ status: { code, signal } }`,
+    /// 跟"远端 unreachable" / "auth failed" 的可读信息搭不上;前端处理逻辑
+    /// (autotest / 命令计数)也按"已经跑过命令"假设,塞这里只会出 bug。
+    SessionError { seq: u64, reason: String },
 }
 
 /// Patch 里的脏行 ── 整行替换语义,前端按 `index` 整行覆盖。
@@ -116,18 +126,6 @@ pub enum RowEntry {
 pub enum TitleChange {
     Set { value: String },
     Reset,
-}
-
-/// 协议层退出状态。
-///
-/// 字段同时保留 `code` 和 `signal`,即使当前 pty crate 的 `ExitStatus` 只
-/// 暴露 `code: u32`(signal 信息未透出)。本层 `signal` 当前永远 `None`,
-/// 留给 pty 层未来扩展时无缝接入,**不**算违反「不为未来写代码」── signal
-/// 是 Unix 子进程退出状态的最小完备形态,协议表面一开始就应该长这样。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct ExitStatus {
-    pub code: Option<i32>,
-    pub signal: Option<i32>,
 }
 
 fn is_false(b: &bool) -> bool {

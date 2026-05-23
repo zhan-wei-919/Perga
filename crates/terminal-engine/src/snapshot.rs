@@ -6,7 +6,7 @@
 
 use bitflags::bitflags;
 
-use crate::size::TerminalSize;
+use transport::TerminalSize;
 
 /// 完整 grid 快照。
 #[derive(Debug, Clone)]

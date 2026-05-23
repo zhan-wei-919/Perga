@@ -8,9 +8,10 @@ publish.workspace = true
 # CellAttrs(bitflags)走自实现 Serialize,所以**不**开 `bitflags/serde` ──
 # 那个 feature 会把 bitflags 序列化成 "BOLD | ITALIC" 这样的 human-readable
 # 字符串,作为前端协议不够显式稳定。
-serde = ["dep:serde"]
+serde = ["dep:serde", "transport/serde"]
 
 [dependencies]
+transport = { path = "../transport" }
 alacritty_terminal.workspace = true
 vte.workspace = true
 bitflags.workspace = true

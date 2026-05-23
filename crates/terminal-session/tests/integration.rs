@@ -2,12 +2,12 @@
 //!
 //! 起真实 PTY(`/bin/echo` / `/bin/cat`)驱动整条 backend 流水线 ── PTY 字节
 //! → Engine → ProtocolEncoder → `ProtocolEvent` 消费者,以及反方向 SessionInput
-//! → terminal-input → PtyCommand。**不**用 mock,protocol 契约一变就立刻打到。
+//! → terminal-input → TransportCommand。**不**用 mock,protocol 契约一变就立刻打到。
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use pty::{PtyConfig, PtySize};
+use pty::PtyConfig;
 use terminal_engine::TerminalSize;
 use terminal_protocol::{ProtocolEvent, RowEntry};
 use terminal_session::{SessionInput, TerminalSession};
@@ -20,7 +20,7 @@ fn pty_config(program: &str, args: &[&str]) -> PtyConfig {
         args: args.iter().map(|s| s.to_string()).collect(),
         cwd: None,
         env: Vec::new(),
-        size: PtySize::new(24, 80),
+        size: TerminalSize::new(24, 80),
     }
 }
 
@@ -42,8 +42,9 @@ fn event_contains(event: &ProtocolEvent, needle: &str) -> bool {
         ProtocolEvent::Patch { dirty_rows, .. } => dirty_rows
             .iter()
             .any(|r| entries_contain(&r.entries, needle)),
-        ProtocolEvent::CommandEnd { .. } => false,
-        ProtocolEvent::Exited { .. } => false,
+        ProtocolEvent::CommandEnd { .. }
+        | ProtocolEvent::Exited { .. }
+        | ProtocolEvent::SessionError { .. } => false,
     }
 }
 
@@ -75,7 +76,7 @@ fn drain_until_exited(session: &TerminalSession, deadline: Instant) -> Vec<Proto
 #[test]
 fn echo_round_trip_emits_init_patch_exited() {
     let session =
-        TerminalSession::spawn(pty_config("/bin/echo", &["hello"])).expect("spawn /bin/echo");
+        TerminalSession::spawn_local(pty_config("/bin/echo", &["hello"])).expect("spawn /bin/echo");
 
     let deadline = Instant::now() + Duration::from_secs(5);
     let events = drain_until_exited(&session, deadline);
@@ -118,7 +119,8 @@ fn echo_round_trip_emits_init_patch_exited() {
 /// Drop session 自动杀 cat ── PtySession::Drop 走 SIGHUP→500ms→SIGKILL。
 #[test]
 fn paste_round_trips_through_cat() {
-    let session = TerminalSession::spawn(pty_config("/bin/cat", &[])).expect("spawn /bin/cat");
+    let session =
+        TerminalSession::spawn_local(pty_config("/bin/cat", &[])).expect("spawn /bin/cat");
 
     session
         .input()
@@ -149,7 +151,8 @@ fn paste_round_trips_through_cat() {
 #[test]
 fn resize_triggers_init_with_new_size() {
     // 起 `cat`,保持子进程 alive,不会自己退出干扰。
-    let session = TerminalSession::spawn(pty_config("/bin/cat", &[])).expect("spawn /bin/cat");
+    let session =
+        TerminalSession::spawn_local(pty_config("/bin/cat", &[])).expect("spawn /bin/cat");
 
     // 先丢掉 synthetic baseline。
     let baseline = session
@@ -202,7 +205,7 @@ fn osc133_emits_command_end() {
     let body = format!("{osc_a}$ cmd\\r\\n{osc_c}out\\r\\n{osc_d}");
     let arg = format!("printf '{body}'");
     let session =
-        TerminalSession::spawn(pty_config("/bin/sh", &["-c", &arg])).expect("spawn /bin/sh");
+        TerminalSession::spawn_local(pty_config("/bin/sh", &["-c", &arg])).expect("spawn /bin/sh");
 
     let deadline = Instant::now() + Duration::from_secs(5);
     let events = drain_until_exited(&session, deadline);

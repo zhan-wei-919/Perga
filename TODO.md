@@ -97,6 +97,85 @@ selection vs TUI mouse 的事件优先级时。
 
 ---
 
+## 移动端 SSH UX(平板 always-SSH + 无 profile 时弹配置卡)
+
+**现状**:Phase 5 v1 在桌面 web/dev 形态下 SSH 是 **side-door** —— 设置面板里
+列 `~/.perga/hosts.toml` 中的 profile,点 Connect 新开 tab。`+` 按钮 / 快捷键
+仍然只开本地 shell。
+
+**触发条件**:Phase 6 Tauri mobile(Android / iOS)接入时,平板没有"本地
+shell"概念。届时:
+
+- 平板形态 `+` 直接走 SSH。
+- 没配 host 时弹配置卡引导用户填一台 host。
+- 桌面侧保留 side-door 不变。
+
+**涉及**:`web/src/state/workspace.ts`(`newTab` 在平板下改成 default profile
+路径)、`web/src/ui/settings_panel.tsx`(配置卡 UI)、Tauri 平台检测 hook
+(等 Phase 6 引入)。
+
+---
+
+## OSC 133 over SSH(SSH session 无失败命令红条)
+
+**现状**:Phase 3 的 OSC 133 shell 集成只在本地 PTY 路径自动注入(见
+`crates/pty/src/shell_inject.rs`),SSH backend 不动远端 shell 配置。
+
+**已知偏差**:SSH session 内跑命令,前端不会给失败命令的输入行打红条 ——
+失败标记功能只在本地 shell 可用。普通滚动 / 选中复制 / scrollback 等都
+不受影响。
+
+**触发条件**:用户实际用 SSH 跑长命令,想要和本地一样的失败可视化。
+
+**要做**:两种思路:
+- a) 远端用户手动 `source ~/.perga/shell/perga-{bash,zsh}.sh`(类似 iTerm2
+     的 shell 集成手动步骤);
+- b) Perga 在 SSH session 启动后通过 channel 注入 setup 命令 —— 但会污染
+     用户 shell 历史,需要谨慎设计。
+
+**涉及**:`crates/ssh/src/session.rs`(注入步骤)、`scripts/perga-{bash,zsh}.sh`
+(远端可用版本)。
+
+---
+
+## SSH auth 扩展(key file / keyboard-interactive)
+
+**现状**:Phase 5 v1 / v1.5 实现了 `agent` + `password` 两种。**未实现**:
+- `key_file { path, passphrase: Option<String> }` —— 用户从沙箱外导入私钥文件,
+  passphrase 保护的需要密码框。平板上没有 ssh-agent 而又不愿用 password 时的兜底。
+- `keyboard_interactive` —— SSH 协议里的多步交互(2FA / OTP),sshd 默认会
+  把密码请求路由到这个方法。russh 提供
+  `authenticate_keyboard_interactive_{start,respond}`。
+
+**触发条件**:
+- 需要导入现有私钥(常见于公司基础设施场景)。
+- 服务端禁用 `PasswordAuthentication`,只放 `keyboard-interactive` —— v1.5
+  的 password 路径会失败,但实际相同凭据用 keyboard-interactive 可通。
+- 服务端要求 2FA / OTP。
+
+**要做**:`AuthSpec` 加 `KeyFile` / `KeyboardInteractive` 变体;
+`crates/ssh/src/session.rs::authenticate_*` 拆成 dispatch;前端表单加文件
+导入控件和 prompt 响应 UI(后者跨平台 modal 一致性要小心)。
+
+**涉及**:`crates/ssh/`、`crates/perga-server/src/profiles.rs`、
+`web/src/ui/settings_panel.tsx`、`web/src/state/profiles.ts`。
+
+---
+
+## SSH integration test(in-process russh-server)
+
+**现状**:Phase 5 v1 只有 `SshConfig` / `ProfileError` 单元测试,SSH 通路
+本身靠手动 `perga-ssh-probe --host x --user y` 验证。无自动化 SSH 集成测试。
+
+**触发条件**:russh 升级 / TOFU 逻辑大改 / shuttle_loop 重写时回归风险增大。
+
+**要做**:用 `russh::server` 在测试进程内起一个 ephemeral SSH server(预置
+host key + agent stub),`SshSession::spawn` 连过去跑一条 echo,验 round-trip。
+
+**涉及**:`crates/ssh/tests/`(新)。
+
+---
+
 ## scrollback 饱和(10000 行)后历史停止增长
 
 **现状**:引擎用 alacritty `history_size()` 的增量算「本帧滚出多少行」

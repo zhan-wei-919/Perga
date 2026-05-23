@@ -138,6 +138,17 @@ export function createSessionStore(size: TerminalSize): SessionStore {
           }),
         );
         return;
+
+      case "session_error":
+        // 会话根本没起来 ── pane 显示 banner,输入路径靠 exited=true 冻结。
+        setState(
+          produce((draft) => {
+            draft.exited = true;
+            draft.seq = ev.seq;
+            draft.sessionError = ev.reason;
+          }),
+        );
+        return;
     }
   }
 

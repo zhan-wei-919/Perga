@@ -182,6 +182,11 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
 
   return (
     <div ref={containerRef} tabindex={0} style={containerStyle(props.focused)}>
+      {/* 会话开始前就失败了(SSH connect / auth / profile 不存在)── 显示错误
+          banner,grid / 历史照常但都是空的,用户能清晰看到原因。 */}
+      <Show when={session.store.state.sessionError}>
+        <SessionErrorBanner reason={session.store.state.sessionError!} />
+      </Show>
       {/* 历史在上、活动区 DOM grid 在下。alt-screen(vim/tmux)时挂起历史,
           grid 独占。 */}
       <Show when={!session.store.state.modes.alt_screen}>
@@ -207,6 +212,34 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
       </div>
     </div>
   );
+};
+
+/// SSH 连接 / 认证失败的内嵌横幅。pane 顶部贴一条,可读地展示后端发来的
+/// 错误原因 —— 否则用户只看到一个空白 grid + 关闭的 WS。
+const SessionErrorBanner: Component<{ reason: string }> = (props) => (
+  <div style={bannerStyle}>
+    <div style={bannerTitleStyle}>会话未能建立</div>
+    <div style={bannerBodyStyle}>{props.reason}</div>
+  </div>
+);
+
+const bannerStyle: Record<string, string> = {
+  padding: "10px 14px",
+  background: "rgba(255,107,107,0.08)",
+  "border-bottom": "1px solid #ff6b6b",
+  color: "#ff6b6b",
+  "font-family": "ui-monospace, monospace",
+  "font-size": "12px",
+};
+
+const bannerTitleStyle: Record<string, string> = {
+  "font-weight": "bold",
+  "margin-bottom": "4px",
+};
+
+const bannerBodyStyle: Record<string, string> = {
+  "white-space": "pre-wrap",
+  "word-break": "break-word",
 };
 
 /// 活动区 grid 宿主。非 alt-screen 时左移一个 gutter 宽,使活动区文本列与

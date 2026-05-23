@@ -1,23 +1,10 @@
-//! 终端 cell 维度。
+//! 给 alacritty 用的 `Dimensions` 桥接。
 //!
-//! 对外暴露 `TerminalSize { rows, cols }`,**不**暴露 pixel 维度 —— 第一刀
-//! 不支持 sixel / iTerm image 这类需要像素信息的协议。
-//!
-//! 内部用一层 newtype `AlacrittyDims` 给 `alacritty_terminal::grid::Dimensions`
-//! 实现 trait,避免把外部 trait impl 散到 public 数据类型上。
+//! 对外的 `TerminalSize { rows, cols }` 已经统一到 [`transport::TerminalSize`],
+//! 在 [`crate::lib`] 里 re-export。本模块只剩 `AlacrittyDims` —— alacritty
+//! 内部 trait 的 newtype impl,避免把外部 trait impl 散到 public 类型上。
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
-pub struct TerminalSize {
-    pub rows: u16,
-    pub cols: u16,
-}
-
-impl TerminalSize {
-    pub const fn new(rows: u16, cols: u16) -> Self {
-        Self { rows, cols }
-    }
-}
+use transport::TerminalSize;
 
 /// 给 alacritty 用的 `Dimensions` 桥接,只在 crate 内部使用。
 pub(crate) struct AlacrittyDims {

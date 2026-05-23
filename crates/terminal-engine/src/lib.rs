@@ -15,7 +15,9 @@ mod snapshot;
 
 pub use engine::{CommandMark, TerminalEngine};
 pub use modes::{MouseReporting, TerminalModes};
-pub use size::TerminalSize;
 pub use snapshot::{
     Cell, CellAttrs, CellWidth, Color, Cursor, CursorStyle, NamedColor, Row, Snapshot,
 };
+// TerminalSize 的事实来源在 transport crate。这里 re-export 保持现有 import
+// 路径 `terminal_engine::TerminalSize` 可用,内部所有引用也走这一个名字。
+pub use transport::TerminalSize;

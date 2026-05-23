@@ -5,6 +5,7 @@ version.workspace = true
 publish.workspace = true
 
 [dependencies]
+transport = { path = "../transport", features = ["serde"] }
 terminal-engine = { path = "../terminal-engine", features = ["serde"] }
 serde.workspace = true
 tracing.workspace = true

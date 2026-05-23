@@ -18,6 +18,8 @@ export type SessionSocketOpts = {
   rows: number;
   /** 1..=1000 */
   cols: number;
+  /** 可选 host profile id;有值时走 SSH backend(`?profile=<id>`),否则本地 shell。 */
+  profileId?: string;
   /** server 端事件回调。已经反序列化好。 */
   onEvent: (ev: ProtocolEvent) => void;
   /** WS 关闭(server 主动或网络断)时调用。`code` / `reason` 来自 CloseEvent。 */
@@ -39,7 +41,7 @@ export class SessionSocket {
 
   /** 同步发起连接;onEvent 在收到第一条 init 帧后被调用。 */
   connect(): void {
-    const url = buildUrl(this.opts.rows, this.opts.cols);
+    const url = buildUrl(this.opts.rows, this.opts.cols, this.opts.profileId);
     const factory = this.opts.factory ?? ((u) => new WebSocket(u));
     const ws = factory(url);
 
@@ -110,9 +112,16 @@ export class SessionSocket {
   }
 }
 
-/// `/ws?rows=&cols=` ── 同源相对路径,dev 模式由 vite proxy 转发到 7777 端口,
-/// Tauri 模式下两端同进程后这层 URL 还会改成 IPC,API 一致。
-function buildUrl(rows: number, cols: number): string {
+/// `/ws?rows=&cols=[&profile=<id>]` ── 同源相对路径,dev 模式由 vite proxy
+/// 转发到 7777 端口,Tauri 模式下两端同进程后这层 URL 还会改成 IPC,API 一致。
+///
+/// `profileId` 缺省 = 本地 shell;指定 = server 走 SSH backend(由 perga-server
+/// 的 profile store 翻译成 SshConfig)。
+function buildUrl(rows: number, cols: number, profileId?: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/ws?rows=${rows}&cols=${cols}`;
+  const base = `${proto}//${window.location.host}/ws?rows=${rows}&cols=${cols}`;
+  if (profileId === undefined || profileId === "") {
+    return base;
+  }
+  return `${base}&profile=${encodeURIComponent(profileId)}`;
 }

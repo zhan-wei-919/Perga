@@ -1,0 +1,18 @@
+[package]
+name = "transport"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[features]
+# 默认不开 serde:transport 内部 IPC 不上 wire,只有少数类型(TerminalSize /
+# ExitStatus)需要被 terminal-protocol 序列化。需要时由上层 crate 显式打开。
+serde = ["dep:serde"]
+
+[dependencies]
+crossbeam-channel.workspace = true
+thiserror.workspace = true
+serde = { workspace = true, optional = true }
+
+[lints]
+workspace = true

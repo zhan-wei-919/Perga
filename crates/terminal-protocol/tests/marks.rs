@@ -111,7 +111,8 @@ fn seq_shared_across_frames_and_command_ends() {
         ProtocolEvent::Init { seq, .. }
         | ProtocolEvent::Patch { seq, .. }
         | ProtocolEvent::CommandEnd { seq, .. }
-        | ProtocolEvent::Exited { seq, .. } => *seq,
+        | ProtocolEvent::Exited { seq, .. }
+        | ProtocolEvent::SessionError { seq, .. } => *seq,
     };
     assert_eq!([seq_of(&f1), seq_of(&ce), seq_of(&f2)], [1, 2, 3]);
 }

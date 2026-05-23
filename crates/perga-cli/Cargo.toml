@@ -12,8 +12,14 @@ path = "src/main.rs"
 name = "perga-bench"
 path = "src/bin/bench.rs"
 
+[[bin]]
+name = "perga-ssh-probe"
+path = "src/bin/ssh_probe.rs"
+
 [dependencies]
+transport = { path = "../transport" }
 pty = { path = "../pty" }
+ssh = { path = "../ssh" }
 terminal-engine = { path = "../terminal-engine" }
 terminal-protocol = { path = "../terminal-protocol" }
 crossbeam-channel.workspace = true

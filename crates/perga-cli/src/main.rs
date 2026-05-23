@@ -14,10 +14,11 @@ use std::thread;
 use crossbeam_channel::{Receiver, Sender};
 use nix::poll::{PollFd, PollFlags, PollTimeout};
 use nix::unistd;
-use pty::{inject_shell_integration, PtyCommand, PtyConfig, PtyEvent, PtySession, PtySize};
+use pty::{inject_shell_integration, PtyConfig, PtySession};
 use signal_hook::consts::SIGWINCH;
 use signal_hook::iterator::Signals;
 use tracing_subscriber::EnvFilter;
+use transport::{TerminalSize, TransportCommand, TransportEvent};
 
 use crate::raw_mode::RawModeGuard;
 
@@ -31,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let stdout_fd = io::stdout().as_raw_fd();
-    let size = term_size_from_fd(stdout_fd).unwrap_or(PtySize::new(24, 80));
+    let size = term_size_from_fd(stdout_fd).unwrap_or(TerminalSize::new(24, 80));
     if mode == CliMode::RawDebug {
         return raw_debug::run(size);
     }
@@ -65,7 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for _sig in &mut signals {
                 if let Some(new_size) = term_size_from_fd(stdout_fd) {
                     if command_tx_sigwinch
-                        .send(PtyCommand::Resize(new_size))
+                        .send(TransportCommand::Resize(new_size))
                         .is_err()
                     {
                         break;
@@ -117,7 +118,7 @@ fn print_usage() {
 ///
 /// 直接 `unistd::read` 走 raw fd,绕过 `std::io::Stdin` 的内部缓冲,
 /// 否则缓冲层可能截留单字节(raw mode 下用户体验会变差)。
-fn pump_stdin(command_tx: Sender<PtyCommand>, wake_rx: OwnedFd) -> io::Result<()> {
+fn pump_stdin(command_tx: Sender<TransportCommand>, wake_rx: OwnedFd) -> io::Result<()> {
     let stdin_fd = io::stdin().as_raw_fd();
     // SAFETY: stdin (fd 0) 在整个进程生命周期都有效。
     let stdin_borrowed = unsafe { BorrowedFd::borrow_raw(stdin_fd) };
@@ -146,7 +147,7 @@ fn pump_stdin(command_tx: Sender<PtyCommand>, wake_rx: OwnedFd) -> io::Result<()
                 Ok(0) => return Ok(()),
                 Ok(n) => {
                     if command_tx
-                        .send(PtyCommand::Write(buf[..n].to_vec()))
+                        .send(TransportCommand::Write(buf[..n].to_vec()))
                         .is_err()
                     {
                         return Ok(());
@@ -162,27 +163,27 @@ fn pump_stdin(command_tx: Sender<PtyCommand>, wake_rx: OwnedFd) -> io::Result<()
     }
 }
 
-fn forward_output(rx: Receiver<PtyEvent>, wake_tx: OwnedFd) {
+fn forward_output(rx: Receiver<TransportEvent>, wake_tx: OwnedFd) {
     let stdout = io::stdout();
     let mut out = stdout.lock();
     while let Ok(ev) = rx.recv() {
         match ev {
-            PtyEvent::Output(data) => {
+            TransportEvent::Output(data) => {
                 if out.write_all(&data).is_err() {
                     break;
                 }
                 let _ = out.flush();
             }
-            PtyEvent::Exited(status) => {
+            TransportEvent::Exited(status) => {
                 tracing::info!(
-                    code = status.code,
-                    success = status.success,
-                    "perga.pty.exited"
+                    code = ?status.code,
+                    signal = ?status.signal,
+                    "perga.transport.exited"
                 );
                 break;
             }
-            PtyEvent::Error(err) => {
-                tracing::warn!(error = %err, "perga.pty.error");
+            TransportEvent::Error(err) => {
+                tracing::warn!(error = %err, "perga.transport.error");
                 break;
             }
         }
@@ -196,7 +197,7 @@ fn forward_output(rx: Receiver<PtyEvent>, wake_tx: OwnedFd) {
 ///
 /// 输出走 stderr,**避免**和 PTY 子进程的 stdout 流抢宿主 stdout 排版。
 /// 显式 `\r\n` 是因为 raw mode 下 OPOST 关闭,单纯 `\n` 不会回到行首。
-fn print_banner(cfg: &PtyConfig, size: PtySize) {
+fn print_banner(cfg: &PtyConfig, size: TerminalSize) {
     let _ = write!(
         io::stderr(),
         "\r\n[perga] PTY demo: {} @ {}x{}. exit / Ctrl-D 退出.\r\n\r\n",
@@ -208,7 +209,7 @@ fn print_banner(cfg: &PtyConfig, size: PtySize) {
 
 /// 通过 TIOCGWINSZ 读出当前真实终端尺寸。stdout 不是 tty(被管道接管)时
 /// 返回 None,调用方走默认 24x80。
-fn term_size_from_fd(fd: RawFd) -> Option<PtySize> {
+fn term_size_from_fd(fd: RawFd) -> Option<TerminalSize> {
     // SAFETY: winsize 是 POD,zero-init 是合法的初始状态。
     let mut ws: nix::libc::winsize = unsafe { std::mem::zeroed() };
     // SAFETY: fd 是调用方传入的有效 fd;buffer 由我们拥有,大小匹配 ioctl 协议。
@@ -222,7 +223,7 @@ fn term_size_from_fd(fd: RawFd) -> Option<PtySize> {
     if rc != 0 || ws.ws_row == 0 || ws.ws_col == 0 {
         return None;
     }
-    Some(PtySize::new(ws.ws_row, ws.ws_col))
+    Some(TerminalSize::new(ws.ws_row, ws.ws_col))
 }
 
 fn init_tracing() {

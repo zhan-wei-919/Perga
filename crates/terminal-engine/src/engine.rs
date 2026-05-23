@@ -22,7 +22,9 @@ use vte::ansi::Processor;
 use crate::listener::{CaptureListener, ListenerState};
 use crate::modes::TerminalModes;
 use crate::shell_integration::ShellIntegration;
-use crate::size::{AlacrittyDims, TerminalSize};
+use transport::TerminalSize;
+
+use crate::size::AlacrittyDims;
 use crate::snapshot::{
     Cell, CellAttrs, CellWidth, Color, Cursor, CursorStyle, NamedColor, Row, Snapshot,
 };

@@ -6,30 +6,17 @@
 
 use std::path::PathBuf;
 
-/// 终端尺寸,单位 cells。pixel 维度暂不支持。
-///
-/// 第一刀只关心 rows/cols;sixel / iTerm image 等需要像素的协议
-/// 在终端引擎层接入时再扩展。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PtySize {
-    pub rows: u16,
-    pub cols: u16,
-}
+use transport::TerminalSize;
 
-impl PtySize {
-    pub const fn new(rows: u16, cols: u16) -> Self {
-        Self { rows, cols }
-    }
-}
-
-impl From<PtySize> for portable_pty::PtySize {
-    fn from(s: PtySize) -> Self {
-        Self {
-            rows: s.rows,
-            cols: s.cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        }
+/// 给 `portable-pty` 用的尺寸转换。`TerminalSize` 不暴露 pixel,而
+/// `portable_pty::PtySize` 需要这两个字段,这里固定填 0(终端没有 pixel
+/// 维度的语义,真要传 pixel 也是 sixel / iTerm image 那一刀的事)。
+pub(crate) fn to_portable_size(s: TerminalSize) -> portable_pty::PtySize {
+    portable_pty::PtySize {
+        rows: s.rows,
+        cols: s.cols,
+        pixel_width: 0,
+        pixel_height: 0,
     }
 }
 
@@ -43,11 +30,11 @@ pub struct PtyConfig {
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
     pub env: Vec<(String, String)>,
-    pub size: PtySize,
+    pub size: TerminalSize,
 }
 
 impl PtyConfig {
-    pub fn new(program: PathBuf, size: PtySize) -> Self {
+    pub fn new(program: PathBuf, size: TerminalSize) -> Self {
         Self {
             program,
             args: Vec::new(),
@@ -58,7 +45,7 @@ impl PtyConfig {
     }
 
     /// 用 `default_shell()` 填充 program。
-    pub fn with_default_shell(size: PtySize) -> Self {
+    pub fn with_default_shell(size: TerminalSize) -> Self {
         Self::new(default_shell(), size)
     }
 }

@@ -206,10 +206,10 @@ fn write_atomic(path: &Path, content: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::PtySize;
+    use transport::TerminalSize;
 
     fn cfg_for(program: &str) -> PtyConfig {
-        PtyConfig::new(PathBuf::from(program), PtySize::new(24, 80))
+        PtyConfig::new(PathBuf::from(program), TerminalSize::new(24, 80))
     }
 
     #[test]

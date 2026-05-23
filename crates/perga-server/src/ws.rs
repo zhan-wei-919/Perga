@@ -1,14 +1,22 @@
-//! WebSocket 端点:`GET /ws?rows=R&cols=C`。
+//! WebSocket 端点:`GET /ws?rows=R&cols=C[&profile=<id>]`。
 //!
-//! 一连接一会话。WS 升级时同步创建 `TerminalSession`,WS 关闭时同步释放。
-//! Phase 0 没有 reconnect / 多 subscriber:省掉 registry,会话 owner 就是
-//! 这个 handler。多 tab / 多 pane 通过开多条 WS 连接实现(每条独立的
-//! TerminalSession,前端自己管 id 映射)。
+//! 一连接一会话。WS 升级**之后**同步创建 `TerminalSession`(本地 PTY 或 SSH),
+//! 关闭时同步释放。
+//!
+//! `profile` query 参数缺省 → 本地 shell;指定 → 走 SSH backend。SSH 路径在
+//! WS upgrade **之后**完成 connect + auth + open shell;**失败时通过 WS 发
+//! 一条 `SessionError` 事件再 close**。这样前端 pane 能看到具体错误原因
+//! (host key mismatch / auth failed / profile not found 等),而不是
+//! 浏览器 `onerror` 后只看到泛泛的 close —— WebSocket API 不暴露 HTTP
+//! status/body 给 JS,所以 upgrade 之前的 4xx/5xx 对用户是不可见的。
+//!
+//! 仍**之前**走 HTTP 错误的:只有纯语法错误(size 越界),WS upgrade 还没
+//! 发生时就拦下,客户端能在 fetch 路径(将来重连尝试 / 调试)拿到清晰 status。
 //!
 //! # 线程模型
 //!
 //! ```text
-//!  PTY 子进程
+//!  backend(PTY 子进程 / SSH channel)
 //!     │ bytes
 //!     ▼
 //!  engine_thread (sync)            ← TerminalSession 内部线程
@@ -22,8 +30,9 @@
 //!  WS (tokio) ──► rx_fut ──► session.input() (crossbeam) ──► engine_thread
 //! ```
 //!
-//! 整条路径上只有 `perga-event-bridge` 这一处把 sync 转 async,其他全部是
-//! 各自世界里的标准模式(见 CLAUDE.md §运行时模型)。
+//! `perga-event-bridge` 仍然是整条 server 路径上唯一的 sync↔async 缝合点
+//! (CLAUDE.md §运行时模型)。SSH backend 自带一组 OS 线程驱动 russh,但那
+//! 是 `crates/ssh` 内部的事,对 server 层不可见。
 
 use std::env;
 
@@ -33,51 +42,44 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use futures_util::stream::StreamExt;
 use futures_util::SinkExt;
-use pty::{inject_shell_integration, PtyConfig, PtySize};
+use pty::{inject_shell_integration, PtyConfig};
 use serde::Deserialize;
+use ssh::SshSession;
+use terminal_protocol::ProtocolEncoder;
 use terminal_session::TerminalSession;
+use transport::TerminalSize;
 
 use crate::bridge::spawn_event_bridge;
+use crate::profiles::{find_profile, load_profiles, to_ssh_config, HostProfile};
 use crate::wire::ClientMessage;
 
 /// query 参数。`rows` / `cols` 严格 > 0;上限 1000 是 sanity ── 没人开
 /// 65535 列,允许过大的值反而会让 alacritty 内部分配巨型 grid。
-#[derive(Debug, Clone, Copy, Deserialize)]
+/// `profile` 可选 —— 缺省 = 本地 shell,指定 = 走 SSH backend(由 server
+/// 的 profile store 翻译成 SshConfig)。
+#[derive(Debug, Clone, Deserialize)]
 pub struct SessionParams {
     pub rows: u16,
     pub cols: u16,
+    pub profile: Option<String>,
 }
 
-/// axum handler 入口。size 校验失败直接返回 400;TerminalSession spawn 失败
-/// 返回 500。两者都不进入 WS 升级路径。
+/// axum handler 入口。**只有 size 越界这种纯语法错误**会在 WS upgrade 之前
+/// 返 HTTP 400;其他所有错误(profile 不存在、SSH connect 失败、本地 PTY
+/// spawn 失败)都在 upgrade 之后通过 WS 发 `SessionError` 事件再 close ──
+/// 浏览器 WebSocket API 不暴露 HTTP body 给 JS,只有走 WS 才能让用户看到
+/// 具体原因。
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     Query(params): Query<SessionParams>,
 ) -> Result<axum::response::Response, (StatusCode, String)> {
     let (rows, cols) =
         validate_size(params.rows, params.cols).map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
-
-    // PtyConfig::with_default_shell 读 $SHELL,继承当前 cwd。
-    // 放到 spawn_blocking 是因为 PtySession::spawn 内部会 fork + exec,
-    // 严格说不算长阻塞,但仍要避开 async runtime 的 cooperative scheduler。
-    // inject_shell_integration 也写集成文件,一并留在 blocking 线程上。
-    let session = tokio::task::spawn_blocking(move || -> Result<TerminalSession, String> {
-        let mut cfg = PtyConfig::with_default_shell(PtySize::new(rows, cols));
-        cfg.cwd = env::current_dir().ok();
-        inject_shell_integration(&mut cfg);
-        TerminalSession::spawn(cfg).map_err(|e| format!("{e}"))
-    })
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("spawn task panicked: {e}"),
-        )
-    })?
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let size = TerminalSize::new(rows, cols);
+    let profile_id = params.profile;
 
     Ok(ws
-        .on_upgrade(move |socket| handle_socket(socket, session))
+        .on_upgrade(move |socket| handle_upgraded(socket, size, profile_id))
         .into_response())
 }
 
@@ -92,6 +94,81 @@ fn validate_size(rows: u16, cols: u16) -> Result<(u16, u16), String> {
     Ok((rows, cols))
 }
 
+/// upgrade 后的入口:决定起 local 还是 SSH backend,失败通过 WS 发
+/// `SessionError` 再 close;成功转入 `handle_socket` 跑双工循环。
+async fn handle_upgraded(socket: WebSocket, size: TerminalSize, profile_id: Option<String>) {
+    let spawned = match profile_id.as_deref() {
+        None => spawn_local_blocking(size).await,
+        Some(id) => spawn_ssh_blocking(id, size).await,
+    };
+    match spawned {
+        Ok(session) => handle_socket(socket, session).await,
+        Err(reason) => send_session_error_and_close(socket, reason).await,
+    }
+}
+
+/// 发 SessionError + 关 WS。**不**等任何后续 IO,失败也无所谓 ── pane 那边
+/// 收到 close 也会把 error 标志置位(详见前端 reducer)。
+async fn send_session_error_and_close(mut socket: WebSocket, reason: String) {
+    let event = ProtocolEncoder::new().encode_session_error(reason);
+    match serde_json::to_string(&event) {
+        Ok(json) => {
+            let _ = socket.send(Message::Text(json)).await;
+        }
+        Err(e) => {
+            // ProtocolEvent 全字段都是 derive(Serialize) 的 plain types,
+            // 实际不会触发;若真出现就在日志里留痕。
+            tracing::error!(error = %e, "perga.server.encode_session_error_failed");
+        }
+    }
+    let _ = socket.close().await;
+}
+
+/// 本地 PTY 路径:spawn_blocking 跑 fork + exec + shell 集成注入。
+/// 错误以 `String` 返回,由 `handle_upgraded` 翻成 SessionError。
+async fn spawn_local_blocking(size: TerminalSize) -> Result<TerminalSession, String> {
+    tokio::task::spawn_blocking(move || -> Result<TerminalSession, String> {
+        let mut cfg = PtyConfig::with_default_shell(size);
+        cfg.cwd = env::current_dir().ok();
+        inject_shell_integration(&mut cfg);
+        TerminalSession::spawn_local(cfg).map_err(|e| format!("{e}"))
+    })
+    .await
+    .map_err(|e| format!("spawn task panicked: {e}"))?
+}
+
+/// SSH 路径:同步加载 profile + 翻译 + 同步 SshSession::spawn(内部 block_on
+/// connect/auth/shell)+ 包成 TerminalSession。整段放在 spawn_blocking 上 —
+/// connect/auth 可能要几百 ms 量级,不该在 tokio worker 上跑。错误以 `String`
+/// 返回,由 `handle_upgraded` 翻成 SessionError。
+async fn spawn_ssh_blocking(id: &str, size: TerminalSize) -> Result<TerminalSession, String> {
+    // profile 解析 / 查找在 spawn_blocking 外做 —— 文件读 / toml 解析也是 IO,
+    // 但耗时 µs 量级,不必单开 blocking task。
+    let profiles = load_profiles().map_err(|e| format!("load host profiles: {e}"))?;
+    let profile = find_profile(&profiles, id).ok_or_else(|| {
+        format!("host profile '{id}' not found in ~/.perga/hosts.toml; 在设置面板里检查 host 列表")
+    })?;
+
+    tokio::task::spawn_blocking(move || -> Result<TerminalSession, String> {
+        spawn_ssh_terminal_session(profile, size).map_err(|e| format!("{e}"))
+    })
+    .await
+    .map_err(|e| format!("spawn task panicked: {e}"))?
+}
+
+/// SSH backend 构造的同步路径,被 `spawn_ssh_blocking` 在 blocking 线程上调。
+fn spawn_ssh_terminal_session(
+    profile: HostProfile,
+    size: TerminalSize,
+) -> Result<TerminalSession, ssh::SshError> {
+    let ssh_cfg = to_ssh_config(&profile);
+    let ssh = SshSession::spawn(ssh_cfg, size)?;
+    // TerminalSession::spawn_with_transport 失败只剩 thread spawn 失败这一种;
+    // 把它折成 SshError::Io 便于上层统一处理。
+    TerminalSession::spawn_with_transport(Box::new(ssh), size)
+        .map_err(|e| ssh::SshError::Io(format!("wrap ssh into terminal-session: {e}")))
+}
+
 /// 升级后的实际双工循环。任一方向结束都拆掉整条会话。
 async fn handle_socket(socket: WebSocket, session: TerminalSession) {
     // event_rx 是 crossbeam Receiver,Clone 后形成同一 channel 的多个消费者
@@ -104,7 +181,7 @@ async fn handle_socket(socket: WebSocket, session: TerminalSession) {
         Ok(rx) => rx,
         Err(e) => {
             tracing::error!(error = %e, "perga.server.bridge_spawn_failed");
-            // 即便 bridge 起不来,session Drop 也会把 PTY 收拾干净。
+            // 即便 bridge 起不来,session Drop 也会把 backend 收拾干净。
             drop_session_blocking(session).await;
             return;
         }
@@ -182,7 +259,7 @@ async fn handle_socket(socket: WebSocket, session: TerminalSession) {
     drop_session_blocking(session).await;
 }
 
-/// TerminalSession::Drop 会同步 join PTY 三条线程 + engine 线程,可能耗时
+/// TerminalSession::Drop 会同步 join PTY / SSH 内部线程 + engine 线程,可能耗时
 /// 数十 ms 量级。在 tokio 任务里直接 drop 会卡住 worker,丢到 spawn_blocking
 /// 上去执行,await 的 panic 在 server 关停场景下吞掉(已经收尾了,不再传播)。
 async fn drop_session_blocking(session: TerminalSession) {

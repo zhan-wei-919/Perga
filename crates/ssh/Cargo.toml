@@ -1,15 +1,21 @@
 [package]
-name = "terminal-session"
+name = "ssh"
 edition.workspace = true
 version.workspace = true
 publish.workspace = true
 
 [dependencies]
 transport = { path = "../transport" }
-pty = { path = "../pty" }
-terminal-engine = { path = "../terminal-engine" }
-terminal-protocol = { path = "../terminal-protocol" }
-terminal-input = { path = "../terminal-input" }
+russh.workspace = true
+# russh 内部跑 tokio,本 crate 自建一个 single-thread runtime 驱动它。
+tokio = { workspace = true, features = [
+    "rt",
+    "macros",
+    "sync",
+    "net",
+    "io-util",
+    "time",
+] }
 crossbeam-channel.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

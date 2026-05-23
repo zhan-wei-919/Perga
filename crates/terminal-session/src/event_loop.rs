@@ -1,43 +1,43 @@
-//! 引擎线程主循环 ── 在 `PtyEvent` 和 `SessionInput` 两个源之间 select,
-//! 把 PTY 字节翻成 `ProtocolEvent`,把上层命令翻成 PTY 字节。
+//! 引擎线程主循环 ── 在 `TransportEvent` 和 `SessionInput` 两个源之间 select,
+//! 把 backend 字节翻成 `ProtocolEvent`,把上层命令翻成 backend 字节。
 //!
 //! 单线程独占 `TerminalEngine` 和 `ProtocolEncoder`,所有可变状态都在这里。
 //! 外界通过 channel 进出,不持锁,不共享内部状态。
 //!
-//! Coalescing 故意不做:一个 `PtyEvent::Output` → 0~N 条 `CommandEnd` + 一个
-//! `encode_frame`。Encoder 内部 RLE + row diff 已经把 wire size 压住,
-//! 真有性能问题再在这里加 batching。
+//! Coalescing 故意不做:一个 `TransportEvent::Output` → 0~N 条 `CommandEnd`
+//! + 一个 `encode_frame`。Encoder 内部 RLE + row diff 已经把 wire size 压住,
+//!   真有性能问题再在这里加 batching。
 
 use crossbeam_channel::{select, Receiver, Sender};
-use pty::{PtyCommand, PtyEvent, PtySize};
 use terminal_engine::{Row, TerminalEngine};
 use terminal_input::{encode_focus, encode_key, encode_mouse, encode_paste};
-use terminal_protocol::{ExitStatus as ProtocolExitStatus, ProtocolEncoder, ProtocolEvent};
+use terminal_protocol::{ProtocolEncoder, ProtocolEvent};
+use transport::{TransportCommand, TransportEvent};
 
 use crate::session::SessionInput;
 
 /// 引擎线程主循环。返回即线程结束。
 ///
-/// 退出条件:任一上行 channel(input / pty event)disconnect,或 event_tx
+/// 退出条件:任一上行 channel(input / transport event)disconnect,或 event_tx
 /// 已无消费者(`send` 返回 Err)。
 pub(crate) fn run_engine_loop(
     engine: &mut TerminalEngine,
     encoder: &mut ProtocolEncoder,
-    pty_event_rx: &Receiver<PtyEvent>,
-    pty_command_tx: &Sender<PtyCommand>,
+    transport_event_rx: &Receiver<TransportEvent>,
+    transport_command_tx: &Sender<TransportCommand>,
     input_rx: &Receiver<SessionInput>,
     event_tx: &Sender<ProtocolEvent>,
 ) {
     loop {
         select! {
-            recv(pty_event_rx) -> msg => {
+            recv(transport_event_rx) -> msg => {
                 match msg {
                     Ok(ev) => {
-                        if !handle_pty_event(engine, encoder, ev, pty_command_tx, event_tx) {
+                        if !handle_transport_event(engine, encoder, ev, transport_command_tx, event_tx) {
                             return;
                         }
                     }
-                    // PTY 反方向先死了。引擎线程也跟着退,event_tx drop 后消费者
+                    // Backend 反方向先死了。引擎线程也跟着退,event_tx drop 后消费者
                     // recv() 拿到 Disconnected。
                     Err(_) => return,
                 }
@@ -45,7 +45,7 @@ pub(crate) fn run_engine_loop(
             recv(input_rx) -> msg => {
                 match msg {
                     Ok(input) => {
-                        if !handle_session_input(engine, encoder, input, pty_command_tx, event_tx) {
+                        if !handle_session_input(engine, encoder, input, transport_command_tx, event_tx) {
                             return;
                         }
                     }
@@ -57,22 +57,25 @@ pub(crate) fn run_engine_loop(
     }
 }
 
-/// 处理一个 PtyEvent。返回 `false` 表示「主循环应立即退出」(消费者断开 / 子进程已 Exited)。
-fn handle_pty_event(
+/// 处理一个 TransportEvent。返回 `false` 表示「主循环应立即退出」(消费者断开 / 子进程已 Exited)。
+fn handle_transport_event(
     engine: &mut TerminalEngine,
     encoder: &mut ProtocolEncoder,
-    ev: PtyEvent,
-    pty_command_tx: &Sender<PtyCommand>,
+    ev: TransportEvent,
+    transport_command_tx: &Sender<TransportCommand>,
     event_tx: &Sender<ProtocolEvent>,
 ) -> bool {
     match ev {
-        PtyEvent::Output(bytes) => {
+        TransportEvent::Output(bytes) => {
             engine.feed(&bytes);
             // Engine 想回写的协议响应(CPR / DA 等)必须在 encode_frame 之前
-            // 灌回 PTY ── TUI 应用会等这些响应,慢一步就 hang。
+            // 灌回 backend ── TUI 应用会等这些响应,慢一步就 hang。
             for w in engine.drain_pending_writes() {
-                if pty_command_tx.send(PtyCommand::Write(w)).is_err() {
-                    // PTY 写端死了,后续输出也送不出去,直接退。
+                if transport_command_tx
+                    .send(TransportCommand::Write(w))
+                    .is_err()
+                {
+                    // backend 写端死了,后续输出也送不出去,直接退。
                     return false;
                 }
             }
@@ -90,22 +93,19 @@ fn handle_pty_event(
             let scrolled = engine.take_scrolled_rows();
             emit_frame(engine, encoder, event_tx, &scrolled, cleared)
         }
-        PtyEvent::Exited(status) => {
-            // PtyEvent::Exited 是 PTY 层的最后一个事件契约(event.rs:8),
+        TransportEvent::Exited(status) => {
+            // TransportEvent::Exited 是 backend 层的最后一个事件契约,
             // 后续不会再有 Output,直接发 Exited 并退出。
-            // pty 层只暴露 code: u32,signal 在协议层固定 None ── 等 pty
-            // 把 signal 信息透出来再补。
-            let proto_status = ProtocolExitStatus {
-                code: Some(status.code as i32),
-                signal: None,
-            };
-            let _ = event_tx.send(encoder.encode_exited(proto_status));
+            //
+            // `status` 已经是 transport::ExitStatus(== terminal_protocol::ExitStatus
+            // 同一类型),不需要再翻译一层。
+            let _ = event_tx.send(encoder.encode_exited(status));
             false
         }
-        PtyEvent::Error(err) => {
+        TransportEvent::Error(err) => {
             // 致命错误,但发起方(reader/writer/waiter)已经在自己退出。这里
             // 只 log;后续 channel 会 disconnect 让循环自然退。
-            tracing::error!(error = %err, "pty fatal error event");
+            tracing::error!(error = %err, "transport fatal error event");
             true
         }
     }
@@ -116,7 +116,7 @@ fn handle_session_input(
     engine: &mut TerminalEngine,
     encoder: &mut ProtocolEncoder,
     input: SessionInput,
-    pty_command_tx: &Sender<PtyCommand>,
+    transport_command_tx: &Sender<TransportCommand>,
     event_tx: &Sender<ProtocolEvent>,
 ) -> bool {
     match input {
@@ -124,14 +124,21 @@ fn handle_session_input(
             let bytes = encode_key(&k, &engine.modes());
             // 空 Vec 是 Encoder 对未映射键的稳定返回(不该走到 ── FunctionKey
             // 已经 type-level 拦截,但 Char + 未定义 Ctrl 组合理论上会到)。
-            if !bytes.is_empty() && pty_command_tx.send(PtyCommand::Write(bytes)).is_err() {
+            if !bytes.is_empty()
+                && transport_command_tx
+                    .send(TransportCommand::Write(bytes))
+                    .is_err()
+            {
                 return false;
             }
             true
         }
         SessionInput::Paste(text) => {
             let bytes = encode_paste(&text, &engine.modes());
-            if pty_command_tx.send(PtyCommand::Write(bytes)).is_err() {
+            if transport_command_tx
+                .send(TransportCommand::Write(bytes))
+                .is_err()
+            {
                 return false;
             }
             true
@@ -139,7 +146,10 @@ fn handle_session_input(
         SessionInput::Mouse(m) => {
             // None = 当前 mode 不上报(Off / Drag 在 Normal 等)。
             if let Some(bytes) = encode_mouse(&m, &engine.modes()) {
-                if pty_command_tx.send(PtyCommand::Write(bytes)).is_err() {
+                if transport_command_tx
+                    .send(TransportCommand::Write(bytes))
+                    .is_err()
+                {
                     return false;
                 }
             }
@@ -147,7 +157,10 @@ fn handle_session_input(
         }
         SessionInput::Focus(gained) => {
             if let Some(bytes) = encode_focus(gained, &engine.modes()) {
-                if pty_command_tx.send(PtyCommand::Write(bytes)).is_err() {
+                if transport_command_tx
+                    .send(TransportCommand::Write(bytes))
+                    .is_err()
+                {
                     return false;
                 }
             }
@@ -155,8 +168,10 @@ fn handle_session_input(
         }
         SessionInput::Resize(size) => {
             engine.resize(size);
-            let pty_size = PtySize::new(size.rows, size.cols);
-            if pty_command_tx.send(PtyCommand::Resize(pty_size)).is_err() {
+            if transport_command_tx
+                .send(TransportCommand::Resize(size))
+                .is_err()
+            {
                 return false;
             }
             // size 变了 encoder 会发 Init(包含新 size 的 baseline);size 没变

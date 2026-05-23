@@ -101,7 +101,12 @@ export type ProtocolEvent =
       seq: number;
       exit: number | null;
       line: number;
-    };
+    }
+  // **会话在开始前就失败了**(SSH path 专用:profile 不存在 / connect 失败 /
+  // auth 失败 / host key mismatch)。reason 是可读字符串,前端 pane 渲染成
+  // 错误 banner。不发 `exited` —— 远端 shell 根本没起来,语义不是"退出"
+  // 而是"从未开始"。后端发完立即 close WS。
+  | { type: "session_error"; seq: number; reason: string };
 
 // 默认色常量。RowEntry::Text 没带 fg/bg/attrs 时落到这里。
 export const DEFAULT_FG: Color = { named: "foreground" };

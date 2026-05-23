@@ -1,7 +1,8 @@
-//! `PtySession`:对外的会话句柄。
+//! `PtySession`:对外的 PTY backend 会话句柄。
 //!
-//! `spawn` 同步起 PTY、起子进程、起三条工作线程,返回一个 `command_tx`
-//! 单向写、`event_rx` 单向读的对象。Drop 时**杀掉子进程**并 join 三条线程。
+//! `spawn` 同步起 PTY、起子进程、起三条工作线程,返回一个对外暴露
+//! `command_tx` / `event_rx`、实现 [`transport::Transport`] 的对象。
+//! Drop 时**杀掉子进程**并 join 三条线程。
 //!
 //! 「杀掉」的契约:SIGHUP → 500ms grace → SIGKILL pgroup,**全部由 waiter
 //! 线程同步执行**。理由见 [`threads::waiter_loop`]:把 `try_wait()`
@@ -14,10 +15,10 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder};
+use transport::{Transport, TransportCommand, TransportEvent};
 
-use crate::command::PtyCommand;
-use crate::config::PtyConfig;
-use crate::event::{PtyError, PtyEvent};
+use crate::config::{to_portable_size, PtyConfig};
+use crate::event::PtyError;
 use crate::threads;
 
 /// `Drop` 和 `Shutdown` 路径上 join 三条线程的总预算。
@@ -26,14 +27,14 @@ const SHUTDOWN_JOIN_BUDGET: Duration = Duration::from_secs(2);
 /// flush stdout 等),又不能拖到用户感知。
 pub(crate) const SIGKILL_GRACE: Duration = Duration::from_millis(500);
 
-/// 一个活的 PTY 会话。
+/// 一个活的 PTY 会话(实现 [`Transport`])。
 ///
-/// - 调用 `command_tx().send(PtyCommand::Write(..))` 向 PTY 写入。
+/// - 调用 `command_tx().send(TransportCommand::Write(..))` 向 PTY 写入。
 /// - 从 `event_rx().recv()` 拿到 Output / Exited / Error 事件。
 /// - Drop 时会发 Shutdown,waiter 线程做 SIGHUP→SIGKILL 升级,然后 join 三条线程。
 pub struct PtySession {
-    command_tx: Sender<PtyCommand>,
-    event_rx: Receiver<PtyEvent>,
+    command_tx: Sender<TransportCommand>,
+    event_rx: Receiver<TransportEvent>,
     /// `Drop` 直接通知 waiter 启动 grace 计时器,绕过可能已死的 writer 线程。
     shutdown_tx: Sender<()>,
     handles: Option<ThreadHandles>,
@@ -53,7 +54,7 @@ impl PtySession {
     pub fn spawn(config: PtyConfig) -> Result<Self, PtyError> {
         let system = native_pty_system();
         let pair = system
-            .openpty(config.size.into())
+            .openpty(to_portable_size(config.size))
             .map_err(|e| PtyError::Spawn(format!("openpty failed: {e}")))?;
 
         let cmd = build_command(&config);
@@ -73,10 +74,10 @@ impl PtySession {
         let cleanup_killer = child.clone_killer();
         let writer_killer = child.clone_killer();
 
-        let (command_tx, command_rx) = crossbeam_channel::unbounded::<PtyCommand>();
-        let (event_tx, event_rx) = crossbeam_channel::unbounded::<PtyEvent>();
+        let (command_tx, command_rx) = crossbeam_channel::unbounded::<TransportCommand>();
+        let (event_tx, event_rx) = crossbeam_channel::unbounded::<TransportEvent>();
         let (reader_done_tx, reader_done_rx) = crossbeam_channel::bounded::<()>(1);
-        // shutdown_tx 有三处持有:writer(收 PtyCommand::Shutdown 后转发)、
+        // shutdown_tx 有三处持有:writer(收 TransportCommand::Shutdown 后转发)、
         // PtySession(Drop 时直接发,兜底 writer 已死)、partial(半启动失败兜底)。
         // 用 unbounded 是因为 send 调用方不能阻塞;实际只会发 1-3 次。
         let (shutdown_tx, shutdown_rx) = crossbeam_channel::unbounded::<()>();
@@ -152,23 +153,33 @@ impl PtySession {
     }
 
     /// 命令发送端的引用。调用方可以 `.clone()` 出多个 Sender 在不同线程使用。
-    pub fn command_tx(&self) -> &Sender<PtyCommand> {
+    pub fn command_tx(&self) -> &Sender<TransportCommand> {
         &self.command_tx
     }
 
     /// 事件接收端的引用。crossbeam 的 Receiver 可 clone,适合在 `select!`
     /// 里和其他 channel 一起使用。
-    pub fn event_rx(&self) -> &Receiver<PtyEvent> {
+    pub fn event_rx(&self) -> &Receiver<TransportEvent> {
+        &self.event_rx
+    }
+}
+
+impl Transport for PtySession {
+    fn command_tx(&self) -> &Sender<TransportCommand> {
+        &self.command_tx
+    }
+
+    fn event_rx(&self) -> &Receiver<TransportEvent> {
         &self.event_rx
     }
 }
 
 impl Drop for PtySession {
     fn drop(&mut self) {
-        // 双管齐下:走 PtyCommand 让 writer 走优雅 SIGHUP 路径;同时直接通知
-        // waiter 启动 grace 计时器,兜底 writer 已死的情况。两个信号都是幂等
-        // 的(waiter 只对第一次响应),不重复造成问题。
-        let _ = self.command_tx.send(PtyCommand::Shutdown);
+        // 双管齐下:走 TransportCommand 让 writer 走优雅 SIGHUP 路径;同时直接
+        // 通知 waiter 启动 grace 计时器,兜底 writer 已死的情况。两个信号都是
+        // 幂等的(waiter 只对第一次响应),不重复造成问题。
+        let _ = self.command_tx.send(TransportCommand::Shutdown);
         let _ = self.shutdown_tx.send(());
         if let Some(handles) = self.handles.take() {
             join_handles_with_timeout(

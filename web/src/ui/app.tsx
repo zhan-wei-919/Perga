@@ -138,7 +138,12 @@ export const App: Component = () => {
         </Show>
         <Show when={settingsOpen()}>
           <Modal onClose={() => setSettingsOpen(false)}>
-            <SettingsPanel />
+            <SettingsPanel
+              onConnectProfile={(profileId) => {
+                workspace.newTabWithProfile(profileId);
+                setSettingsOpen(false);
+              }}
+            />
           </Modal>
         </Show>
       </div>

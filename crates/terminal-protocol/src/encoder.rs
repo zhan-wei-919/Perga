@@ -115,6 +115,19 @@ impl ProtocolEncoder {
             line,
         }
     }
+
+    /// 产生 SessionError 事件 —— 会话在开始前失败(SSH connect / auth / open_shell
+    /// 等)。前端 pane 据此显示错误 banner。
+    ///
+    /// 通常 server 在 WS upgrade 之后、`TerminalSession` spawn 之前用这个不可
+    /// 重用的 Encoder 实例 emit 一次,然后立刻关 WS;`seq=1`。
+    pub fn encode_session_error(&mut self, reason: String) -> ProtocolEvent {
+        self.seq += 1;
+        ProtocolEvent::SessionError {
+            seq: self.seq,
+            reason,
+        }
+    }
 }
 
 impl Default for ProtocolEncoder {

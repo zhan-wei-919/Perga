@@ -52,10 +52,16 @@ export type WorkspaceState = {
 /**
  * 一个 pane 需要的全部资源。leaf id 铸造时创建,leaf 离树时 dispose。
  * socket 完全封装在内 ── 不暴露裸 socket,也就没有可空 socket 泄漏到外面。
+ *
+ * `profileId` 在 leaf 创建时一次性绑定:有值 → SSH backend(`?profile=<id>`);
+ * 缺省 → 本地 shell。leaf 整个生命周期内固定,不支持 mid-session 切换
+ * backend(那等价于关掉重开)。
  */
 export type LeafSession = {
   id: LeafId;
   store: SessionStore;
+  /** 此 leaf 绑定的 profile;`undefined` 表示本地 shell。 */
+  readonly profileId: string | undefined;
   /** 构造并连接 socket。幂等:已连则忽略(组件 remount 安全)。 */
   connect(rows: number, cols: number): void;
   send(msg: ClientMessage): void;
@@ -71,6 +77,8 @@ export type LeafSession = {
 export type Workspace = {
   state: WorkspaceState;
   newTab(): void;
+  /** 用指定 host profile id 开新 tab,leaf socket 走 SSH backend。 */
+  newTabWithProfile(profileId: string): void;
   closeTab(tabId: string): void;
   switchTab(index: number): void;
   nextTab(): void;
@@ -103,7 +111,10 @@ export function createWorkspace(
   // 收到 WS 事件时,远晚于 createWorkspace 返回),所以这里前向引用是安全的。
   let state: WorkspaceState;
 
-  const createLeafSession = (id: LeafId): LeafSession => {
+  const createLeafSession = (
+    id: LeafId,
+    profileId: string | undefined,
+  ): LeafSession => {
     const store = createSessionStore(FALLBACK_SIZE);
     let socket: SessionSocket | null = null;
 
@@ -134,11 +145,13 @@ export function createWorkspace(
     return {
       id,
       store,
+      profileId,
       connect(rows, cols) {
         if (socket) return; // 幂等
         socket = new SessionSocket({
           rows,
           cols,
+          profileId,
           onEvent,
           onClose: ({ code, reason }) => {
             console.warn(
@@ -175,9 +188,10 @@ export function createWorkspace(
   };
 
   // 铸造一个 leaf + 它的 session,登记进注册表,返回 leaf id。
-  const createLeaf = (): LeafId => {
+  // `profileId` 缺省 = 本地 shell;指定 = SSH backend。
+  const createLeaf = (profileId?: string): LeafId => {
     const id: LeafId = `leaf-${leafSeq++}`;
-    registry.set(id, createLeafSession(id));
+    registry.set(id, createLeafSession(id, profileId));
     return id;
   };
 
@@ -186,9 +200,12 @@ export function createWorkspace(
     registry.delete(id);
   };
 
-  // 造一个全新 tab:一个 leaf + 它的 session。
-  const makeTab = (): Tab => {
-    const leaf = createLeaf();
+  // 造一个全新 tab:一个 leaf + 它的 session。`profileId` 透到 leaf。
+  // split 出来的子 pane 不继承 profile —— split 总是开本地 shell,因为
+  // 「在 SSH 远端再开一个 SSH 子会话」不是 v1 的产品语义(那需要 Multi-channel
+  // 或嵌套 ssh,留给后续)。
+  const makeTab = (profileId?: string): Tab => {
+    const leaf = createLeaf(profileId);
     return { id: `tab-${tabSeq++}`, tree: leafTree(leaf), focusedLeaf: leaf };
   };
 
@@ -209,6 +226,16 @@ export function createWorkspace(
 
   const newTab = (): void => {
     const tab = makeTab();
+    setStore(
+      produce((s) => {
+        s.tabs.push(tab);
+        s.activeTab = s.tabs.length - 1;
+      }),
+    );
+  };
+
+  const newTabWithProfile = (profileId: string): void => {
+    const tab = makeTab(profileId);
     setStore(
       produce((s) => {
         s.tabs.push(tab);
@@ -332,6 +359,7 @@ export function createWorkspace(
   return {
     state: store,
     newTab,
+    newTabWithProfile,
     closeTab,
     switchTab,
     nextTab,

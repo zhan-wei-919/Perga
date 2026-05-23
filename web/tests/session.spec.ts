@@ -183,6 +183,31 @@ describe("createSessionStore", () => {
     expect(store.state.exited).toBe(true);
     expect(store.state.seq).toBe(42);
   });
+
+  it("session_error 同时置 exited + sessionError + seq", () => {
+    const store = createSessionStore({ rows: 1, cols: 1 });
+    // 模拟服务端 SSH 连接失败发出的 SessionError。
+    store.dispatch({
+      type: "session_error",
+      seq: 1,
+      reason: "ssh auth failed: password rejected by server",
+    });
+    expect(store.state.exited).toBe(true);
+    expect(store.state.sessionError).toBe(
+      "ssh auth failed: password rejected by server",
+    );
+    expect(store.state.seq).toBe(1);
+  });
+
+  it("正常路径下 sessionError 保持 null", () => {
+    const store = createSessionStore({ rows: 1, cols: 1 });
+    store.dispatch({
+      type: "exited",
+      seq: 1,
+      status: { code: 0, signal: null },
+    });
+    expect(store.state.sessionError).toBeNull();
+  });
 });
 
 describe("history accumulation + command_end", () => {
