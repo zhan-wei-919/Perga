@@ -49,7 +49,7 @@ export type BenchResult = {
   dispatchP99: number;
   dispatchMax: number;
   dispatchSamples: number;
-  /// RAF canvas render frame 的汇总(ms)。
+  /// RAF renderer frame 的汇总(ms)。
   renderFrameP50: number;
   renderFrameP99: number;
   renderFrameMax: number;
@@ -130,7 +130,7 @@ export class AutoBench {
     }
   }
 
-  /// 记录一个已排队的 RAF render 在 flush 前被取消(GridCanvas 卸载)。
+  /// 记录一个已排队的 RAF render 在 flush 前被取消(renderer 卸载)。
   /// 与 onRenderScheduled 配对,避免 pending 计数泄漏导致 waitSettle 永久超时。
   onRenderCancelled(): void {
     if (this.pendingRenderFrames > 0) this.pendingRenderFrames--;
@@ -311,7 +311,7 @@ function logResult(r: BenchResult): void {
     `· ${r.dispatchSamples} samples`,
   );
   console.log(
-    "render canvas RAF (ms):",
+    "render RAF (ms):",
     `p50 ${ms(r.renderFrameP50)}`,
     `p99 ${ms(r.renderFrameP99)}`,
     `max ${ms(r.renderFrameMax)}`,

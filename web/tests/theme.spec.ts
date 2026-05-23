@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { colorToCanvasCss, colorToDomCss } from "../src/render/palette";
+import { colorToDomCss } from "../src/render/palette";
 import {
   THEME_IDS,
   THEMES,
@@ -91,32 +91,5 @@ describe("colorToDomCss", () => {
   it("越界 indexed 兜底到默认前 / 背景", () => {
     expect(colorToDomCss({ indexed: 999 }, "fg")).toBe("var(--term-foreground)");
     expect(colorToDomCss({ indexed: -1 }, "bg")).toBe("var(--term-background)");
-  });
-});
-
-describe("colorToCanvasCss", () => {
-  const term = paletteForTheme("dark");
-
-  it("任何输入都不返回 var()", () => {
-    const inputs = [
-      { named: "red" as const },
-      { indexed: 3 },
-      { indexed: 16 },
-      { indexed: 250 },
-      { rgb: { r: 1, g: 2, b: 3 } },
-      { indexed: 999 },
-    ];
-    for (const c of inputs) {
-      expect(colorToCanvasCss(c, "fg", term)).not.toContain("var(");
-    }
-  });
-
-  it("named / indexed-0..15 查 term 表", () => {
-    expect(colorToCanvasCss({ named: "green" }, "fg", term)).toBe(term.green);
-    expect(colorToCanvasCss({ indexed: 1 }, "fg", term)).toBe(term.red);
-  });
-
-  it("indexed cube 算出 rgb", () => {
-    expect(colorToCanvasCss({ indexed: 16 }, "fg", term)).toBe("rgb(0,0,0)");
   });
 });

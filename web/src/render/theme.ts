@@ -1,12 +1,11 @@
 // 主题 —— 终端 16 色调色板 + UI chrome 配色,深 / 浅各一套。
 //
 // 一个 `Theme` 同时驱动两处:
-//   1. 终端调色板(`term`)—— Canvas 与 DOM 命令块的字符颜色。
+//   1. 终端调色板(`term`)—— DOM 终端文本的字符颜色。
 //   2. UI chrome(`chrome`)—— tab 栏 / gutter / 命令块卡片 / 浮层等外壳颜色。
 //
-// `applyTheme` 把两者全写成 `:root` 的 CSS 自定义属性。chrome 与 DOM 命令块
-// 文本直接 `var(--…)` 消费 —— 切主题零重渲染;Canvas 不接受 `var()`,另走
-// `paletteForTheme` 拿具体色(见 `palette.ts`)。
+// `applyTheme` 把两者全写成 `:root` 的 CSS 自定义属性。chrome 与 DOM 终端
+// 文本直接 `var(--…)` 消费 —— 切主题零重渲染。
 
 import type { NamedColor } from "../state/protocol";
 
@@ -143,7 +142,7 @@ const LIGHT: ThemeDef = {
 
 export const THEMES: Record<ThemeId, ThemeDef> = { dark: DARK, light: LIGHT };
 
-/// 终端调色板:`NamedColor` → 具体颜色串。Canvas 路径用(见 `palette.ts`)。
+/// 终端调色板:`NamedColor` → 具体颜色串。
 export type TermPalette = Record<NamedColor, string>;
 
 /// 取某主题的终端调色板(具体色,不含 `var()`)。
@@ -154,7 +153,7 @@ export function paletteForTheme(id: ThemeId): TermPalette {
 /// 把主题写进 `:root` 的 CSS 自定义属性。纯 DOM 副作用,不涉及 Solid。
 ///
 /// term 写成 `--term-<NamedColor>`,chrome 写成 `--pg-<ChromeVar>`。chrome 与
-/// DOM 命令块 `var()` 消费这些值 —— 调用本函数即完成换肤,无需重渲染。
+/// DOM 终端文本 `var()` 消费这些值 —— 调用本函数即完成换肤,无需重渲染。
 export function applyTheme(id: ThemeId): void {
   const def = THEMES[id];
   const style = document.documentElement.style;

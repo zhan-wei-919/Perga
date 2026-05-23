@@ -1,13 +1,13 @@
 // Cell 字体度量。
 //
-// 终端的核心几何就是 cellW / cellH:rows/cols 由容器尺寸除得到,canvas 按
-// cell 网格绘制,DOM block 用同一份度量保持视觉一致(Phase 3 才用到)。
+// 终端的核心几何就是 cellW / cellH:rows/cols 由容器尺寸除得到,DOM grid 与
+// 历史行用同一份度量保持视觉一致。
 //
 // 测度方式:在 body 下挂一个 hidden span,用 `getBoundingClientRect()` 而不是
 // `canvas.measureText`。原因是 canvas measureText 在不同浏览器对 line-height
 // 处理不一致,getBoundingClientRect 给的是真实布局尺寸。
 
-/// 终端字体栈。Canvas / DOM 命令块共用,保证视觉一致。
+/// 终端字体栈。活动区与历史区共用,保证视觉一致。
 export const FONT_FAMILY =
   'ui-monospace, "Cascadia Code", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace';
 

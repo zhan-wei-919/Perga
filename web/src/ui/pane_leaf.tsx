@@ -1,7 +1,7 @@
 // 一个终端 pane:把一个 `LeafSession` 装配成可见、可输入的终端。
 //
-// 布局:一个 `overflow-y:auto` 滚动容器,里面是 `[虚拟 DOM 历史][活动区 Canvas]`。
-// 历史(scrollback)= 可选中复制的纯文本行;活动区 = Canvas。
+// 布局:一个 `overflow-y:auto` 滚动容器,里面是 `[虚拟 DOM 历史][活动区 DOM grid]`。
+// 历史(scrollback)和活动区都走 DOM 文本渲染,但活动区仍保持终端 cell grid 语义。
 //
 // session 资源(socket / store)由 workspace 拥有,本组件只消费 —— 组件 unmount
 // **不**关 socket(split 重建树时 Solid 可能 remount 本组件,session 必须存活)。
@@ -19,7 +19,7 @@ import { shouldBrowserHandleCopyShortcut } from "../input/copy_shortcuts";
 import { encodeKeyboardEvent } from "../input/keyboard";
 import { shouldBrowserHandlePasteShortcut } from "../input/paste_shortcuts";
 import { observeContainerResize } from "../input/resize";
-import { GridCanvas } from "../render/grid_canvas";
+import { GridDom } from "../render/grid_dom";
 import { HISTORY_GUTTER_PX, HistoryView } from "../render/history_view";
 import { cellsForBox, FONT_FAMILY, measureCell } from "../render/metrics";
 import { useSettings } from "../state/settings_context";
@@ -46,7 +46,7 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
   const [scrollTop, setScrollTop] = createSignal(0);
   const [viewportH, setViewportH] = createSignal(0);
 
-  // 自动滚到底:有新内容时把活动区 Canvas 滚进视野;用户手动上滚后暂停,
+  // 自动滚到底:有新内容时把活动区 grid 滚进视野;用户手动上滚后暂停,
   // 滚回底部恢复。标准终端行为。
   let stickToBottom = true;
   let scrollRaf: number | undefined;
@@ -182,8 +182,8 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
 
   return (
     <div ref={containerRef} tabindex={0} style={containerStyle(props.focused)}>
-      {/* 历史在上、活动区 Canvas 在下。alt-screen(vim/tmux)时挂起历史,
-          Canvas 独占。 */}
+      {/* 历史在上、活动区 DOM grid 在下。alt-screen(vim/tmux)时挂起历史,
+          grid 独占。 */}
       <Show when={!session.store.state.modes.alt_screen}>
         <HistoryView
           history={session.store.history}
@@ -197,7 +197,7 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
         ref={gridHostRef}
         style={gridHostStyle(session.store.state.modes.alt_screen)}
       >
-        <GridCanvas
+        <GridDom
           state={session.store.state}
           grid={session.store.grid}
           onRenderScheduled={() => session.reportRenderScheduled()}
@@ -209,7 +209,7 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
   );
 };
 
-/// 活动区 Canvas 宿主。非 alt-screen 时左移一个 gutter 宽,使活动区文本列与
+/// 活动区 grid 宿主。非 alt-screen 时左移一个 gutter 宽,使活动区文本列与
 /// 历史文本列对齐(历史行左侧那条 gutter 是失败标记位)。
 function gridHostStyle(altScreen: boolean): Record<string, string> {
   return {

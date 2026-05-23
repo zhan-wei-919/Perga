@@ -1,11 +1,11 @@
 // App 顶层组件:workspace root。
 //
 // 装配 = TabBar(顶) + 当前 active tab 的 PaneTreeView(主区) + 一个 capture
-// 阶段的 workspace 快捷键拦截器。每个终端 pane 的 WS / store / canvas / 输入
+// 阶段的 workspace 快捷键拦截器。每个终端 pane 的 WS / store / renderer / 输入
 // 都下沉到 `PaneLeaf`(经 `PaneTreeView` 递归渲染);App 自己不直接碰 socket。
 //
 // PaneTreeView 用 `<Show keyed>` 按 active tab 对象身份重建:切 tab 整体重挂
-// (后台 tab 的 canvas 卸载、WS 保活),tab 内 split/close 不触发重挂。
+// (后台 tab 的 renderer 卸载、WS 保活),tab 内 split/close 不触发重挂。
 
 import {
   type Component,

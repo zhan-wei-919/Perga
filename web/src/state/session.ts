@@ -7,7 +7,7 @@
 //   外作为普通 Cell[][] backing buffer,渲染热路径不穿 Solid proxy。
 //
 // 设计选择:grid 在内存里**展开成 Cell[][]**,而不是缓存 RLE。
-// - 渲染热路径(Canvas redraw)按 (row, col) 随机访问 cell,展开后是 O(1)。
+// - 渲染热路径按 (row, col) 随机访问 cell,展开后是 O(1)。
 // - 80×24 = 1920 cell,patch 时常态只重写若干行,内存 / GC 都不是瓶颈。
 // - RLE 缓存换来的窄带宽优势已经在 wire 端用过了 ── 解码后再保留 RLE 只会
 //   让渲染层做二次解码,没意义。

@@ -8,7 +8,7 @@
 //   - parse ms p99  : `JSON.parse(text)` 的耗时分布(每个 msg 单独测)。
 //                     通常 <0.5ms;>5ms 说明 wire 太大或 GC 压力。
 //   - dispatch ms p99: `store.dispatch(ev)` 即 reducer + Solid setStore。
-//   - render ms p99  : RAF 中 canvas redraw 的 CPU 工作;可见 paint 还要等浏览器
+//   - render ms p99  : RAF 中 renderer 提交更新的 CPU 工作;可见 paint 还要等浏览器
 //                     compositor frame(~16ms@60Hz)。
 //   - bytes p99     : 单条 msg 的 JSON 长度,用于和 wire ratio 对照。
 
@@ -59,7 +59,7 @@ export class PerfTracker {
     this.byteSamples.push(bytes);
   }
 
-  /// 记录一个 dispatch 调用耗时(ms)。RAF canvas 绘制另走 render 样本。
+  /// 记录一个 dispatch 调用耗时(ms)。RAF renderer 更新另走 render 样本。
   recordDispatch(durationMs: number): void {
     if (!this.enabled) return;
     this.dispatchSamples.push(durationMs);

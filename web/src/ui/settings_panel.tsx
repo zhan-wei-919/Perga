@@ -1,7 +1,7 @@
 // 设置面板内容 —— 缩放 / 主题。挂在 `Modal` 里。
 //
 // 缩放滑块:label 实时跟手,但真正提交给 settings(触发 re-measure + resize +
-// Canvas 整屏重绘)做 120ms trailing debounce,避免拖动时连环重排。
+// DOM grid 整屏更新)做 120ms trailing debounce,避免拖动时连环重排。
 
 import { For, type Component, createSignal } from "solid-js";
 

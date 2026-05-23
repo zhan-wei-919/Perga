@@ -3,7 +3,7 @@
 // 历史可能上万行,只渲染当前可见窗口(屏高 + overscan):一个撑总高的 spacer
 // + 窗口内绝对定位的行。失败命令的行左侧 gutter 染红。
 //
-// 行高必须与 Canvas 的 cellH 完全一致(同一 `fontSize*1.3` 公式),否则历史与
+// 行高必须与活动区 DOM grid 的 cellH 完全一致(同一 `fontSize*1.3` 公式),否则历史与
 // 活动区行距错位、滚动跳变。
 
 import { For, type Component, createMemo } from "solid-js";
@@ -14,7 +14,7 @@ import { useSettings } from "../state/settings_context";
 import { FONT_FAMILY } from "./metrics";
 import { segmentStyle, segmentsForRow } from "./row_segments";
 
-/// 历史行左侧 gutter 宽度(失败标记占这条)。活动区 Canvas 左移同样的量对齐。
+/// 历史行左侧 gutter 宽度(失败标记占这条)。活动区 grid 左移同样的量对齐。
 export const HISTORY_GUTTER_PX = 6;
 
 const OVERSCAN = 8;

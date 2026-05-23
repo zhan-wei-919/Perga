@@ -61,7 +61,7 @@ export type LeafSession = {
   send(msg: ClientMessage): void;
   /** 关闭 socket。由 workspace 在 leaf 离树时调用。 */
   dispose(): void;
-  /** GridCanvas 渲染回调的 perf 漏斗 ── 内部路由到 perf overlay / autotest。 */
+  /** renderer 渲染回调的 perf 漏斗 ── 内部路由到 perf overlay / autotest。 */
   reportRenderScheduled(): void;
   reportRenderFrame(durationMs: number): void;
   /** 已排队的 render 在 flush 前被取消(组件卸载)。 */
@@ -113,7 +113,7 @@ export function createWorkspace(
       return tab !== undefined && tab.focusedLeaf === id;
     };
 
-    // 后台 tab 的 pane:canvas 已卸载(不渲染),但 WS 保活、dispatch 照跑。
+    // 后台 tab 的 pane renderer 已卸载(不渲染),但 WS 保活、dispatch 照跑。
     // 后台噪声程序会持续耗主线程 ── 已知限制,见仓库根 TODO.md。
     const onEvent = (ev: ProtocolEvent): void => {
       if (!perfTracker?.isEnabled()) {

@@ -1,7 +1,7 @@
 // 设置 store 的 Solid Context。
 //
-// zoom / 主题 / 命令块风格是横切关注点,要穿过递归的 pane 树到达叶子组件
-// (PaneLeaf / GridCanvas / BlockList)。用 Context 而非逐层 prop-drilling ——
+// zoom / 主题是横切关注点,要穿过递归的 pane 树到达叶子组件
+// (PaneLeaf / GridDom)。用 Context 而非逐层 prop-drilling ——
 // `App` provide 一次,叶子直接 `useSettings()` 消费。
 
 import { createContext, useContext } from "solid-js";

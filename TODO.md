@@ -6,59 +6,29 @@
 
 ---
 
-## 活动区主渲染从 Canvas 改成 DOM 行渲染
+## 终端级选择复制系统未实现
 
-**现状**:活动区仍由 `web/src/render/grid_canvas.tsx` 用 Canvas 2D 绘制。已经
-修过多轮残影问题(旧光标整行重画、行重绘前整行清背景、CJK 宽度测量兜底、
-`fillText` clip),但中文 / fallback 字体 / 小数 cell 宽度 / 抗锯齿边界仍然
-容易出现视觉瑕疵。历史区 `web/src/render/history_view.tsx` 已经是 DOM 行 +
-`row_segments.ts` 的 run segment 渲染,视觉和复制天然更接近浏览器文本。
-
-**已知偏差**:
-
-- Canvas 字体效果和浏览器 DOM 文本相比差,中文尤其明显。
-- 为了修 Canvas 残影不断增加局部补丁,复杂度继续上升。
-- 后续终端选择复制 / IME / 选区高亮仍要围绕 Canvas 做额外 overlay 和文本
-  拼接;如果活动区也 DOM,这些功能会更直接。
-
-**触发条件**:开始做复制系统前,优先把活动区主 renderer 切到 DOM。做法:
-
-- 新增 `web/src/render/grid_dom.tsx`,复用 `row_segments.ts`。
-- **不要** per-cell DOM。按行渲染,每行由连续同样 style 的 segment `<span>`
-  组成,类似 Canvas run-grouping。
-- 光标和 selection 高亮用绝对定位 overlay,按 `cellW/cellH` 定位。
-- `PaneLeaf` 先用常量 / 设置切换 DOM grid 与 Canvas grid;Canvas 暂留作
-  fallback / 性能对比,不要立刻删除。
-- 继续以 raw `Cell[][]` + `rowGen` 驱动,避免把 grid 放回 Solid store。
-
-**涉及**:`web/src/render/grid_dom.tsx`(新),`web/src/render/row_segments.ts`,
-`web/src/ui/pane_leaf.tsx`,`web/src/render/grid_canvas.tsx`,
-`web/src/render/metrics.ts`,`web/tests/grid_canvas.spec.ts`。
-
----
-
-## 终端选择复制系统未实现
-
-**现状**:普通滚动终端已改成 `[历史 DOM][活动区 Canvas]`。历史区
-`web/src/render/history_view.tsx` 可以靠浏览器原生 selection 复制;活动区
-`web/src/render/grid_canvas.tsx` 是 Canvas,浏览器无法选中其中的当前 prompt /
-当前屏文字。`web/src/input/copy_shortcuts.ts` 目前只处理「已有 DOM 文本选区
-时 Ctrl/Cmd+C 走浏览器复制,否则 Ctrl+C 发 SIGINT」。
+**现状**:普通滚动终端是 `[历史 DOM][活动区 DOM grid]`。历史区
+`web/src/render/history_view.tsx` 和活动区 `web/src/render/grid_dom.tsx` 都是
+DOM 文本,浏览器原生 selection 已经可以复制当前可见文本。`web/src/input/copy_shortcuts.ts`
+目前处理「已有 DOM 文本选区时 Ctrl/Cmd+C 走浏览器复制,否则 Ctrl+C 发 SIGINT」。
 
 **已知偏差**:
 
-- 不能复制当前活动区 Canvas 里的文本。
-- 不能跨 history + 当前屏一次性复制。
-- 复制行为还没有终端 selection overlay,也没有宽字符 / `wide_spacer` 的复制
-  文本拼接规则。
+- 浏览器原生复制只覆盖当前 DOM 中实际存在的可见文本;history 虚拟化窗口外的
+  行不会进入一次原生选区。
+- 复制结果没有终端语义归一化:宽字符 / `wide_spacer` / 行尾空白 / 矩形选区等
+  规则还没有统一坐标模型。
+- 还没有终端 selection overlay,无法支持拖拽自动滚动、双击选词、三击选行等
+  终端常见交互。
 
-**触发条件**:实现复制功能时。先做上面的 DOM active grid,再做最小闭环:
+**触发条件**:实现复制功能时。活动区已是 DOM grid,下一步做最小闭环:
 统一 history+grid 坐标模型、鼠标拖拽选区、overlay 高亮、`Ctrl/Cmd+C` 有终端
 选区时拼纯文本写入 clipboard、无选区时 `Ctrl+C` 继续发 SIGINT。先不做双击
 选词、三击选行、块选择和拖拽自动滚动。
 
 **涉及**:`web/src/ui/pane_leaf.tsx`,`web/src/render/history_view.tsx`,
-`web/src/render/grid_canvas.tsx`,`web/src/state/history.ts`,
+`web/src/render/grid_dom.tsx`,`web/src/state/history.ts`,
 `web/src/state/session_store.ts`,`web/src/input/copy_shortcuts.ts`。
 
 ---
@@ -106,8 +76,8 @@ selection vs TUI mouse 的事件优先级时。
 
 ## 后台 tab 的 dispatch 不暂停
 
-**现状**:Phase 2 每个 pane 一条独立 WS。切换 tab 时,后台 tab 的 pane canvas 会
-卸载(不再渲染),但它的 WS 仍保活、`LeafSession.onEvent` 仍逐事件跑
+**现状**:Phase 2 每个 pane 一条独立 WS。切换 tab 时,后台 tab 的 pane renderer
+会卸载(不再渲染),但它的 WS 仍保活、`LeafSession.onEvent` 仍逐事件跑
 `store.dispatch`(更新 backing grid + rowGen)。这是有意的简化 —— 让后台 tab 切回
 来时画面已是最新,不需要重放。
 
