@@ -39,6 +39,7 @@ export type ChromeVar =
   | "gutter"
   | "accent"
   | "exit-fail"
+  | "selection-bg"
   | "overlay-bg"
   | "overlay-border"
   | "overlay-hover"
@@ -94,6 +95,7 @@ const DARK: ThemeDef = {
     gutter: "#333333",
     accent: "#3b8eea",
     "exit-fail": "#f14c4c",
+    "selection-bg": "rgba(59,142,234,0.42)",
     "overlay-bg": "#2a2a2c",
     "overlay-border": "#3a3a3a",
     "overlay-hover": "#37373a",
@@ -146,6 +148,7 @@ const LIGHT: ThemeDef = {
     gutter: "#c4c4c4",
     accent: "#0a5fc4",
     "exit-fail": "#d11a1a",
+    "selection-bg": "rgba(10,95,196,0.28)",
     "overlay-bg": "#ffffff",
     "overlay-border": "#d0d0d0",
     "overlay-hover": "#e8e8e8",
@@ -196,6 +199,7 @@ const CLASSIC: ThemeDef = {
     gutter: "#202020",
     accent: "#729fcf",
     "exit-fail": "#ef2929",
+    "selection-bg": "rgba(114,159,207,0.42)",
     "overlay-bg": "#111111",
     "overlay-border": "#343434",
     "overlay-hover": "#1f1f1f",
@@ -246,6 +250,7 @@ const SOLARIZED_DARK: ThemeDef = {
     gutter: "#073642",
     accent: "#268bd2",
     "exit-fail": "#dc322f",
+    "selection-bg": "rgba(38,139,210,0.38)",
     "overlay-bg": "#073642",
     "overlay-border": "#164b59",
     "overlay-hover": "#0d3f4c",
@@ -296,6 +301,7 @@ const GRUVBOX_DARK: ThemeDef = {
     gutter: "#3c3836",
     accent: "#83a598",
     "exit-fail": "#fb4934",
+    "selection-bg": "rgba(131,165,152,0.36)",
     "overlay-bg": "#32302f",
     "overlay-border": "#504945",
     "overlay-hover": "#3c3836",
@@ -346,6 +352,7 @@ const HIGH_CONTRAST: ThemeDef = {
     gutter: "#ffffff",
     accent: "#00ffff",
     "exit-fail": "#ff5f5f",
+    "selection-bg": "rgba(0,255,255,0.45)",
     "overlay-bg": "#000000",
     "overlay-border": "#ffffff",
     "overlay-hover": "#222222",

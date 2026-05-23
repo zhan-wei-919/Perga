@@ -761,7 +761,8 @@ function rootStyle(size: GridDomSize, metrics: CellMetrics): Record<string, stri
     whiteSpace: "pre",
     letterSpacing: "0",
     fontVariantLigatures: "none",
-    userSelect: "text",
+    userSelect: "none",
+    webkitUserSelect: "none",
     contain: "layout paint style",
   };
 }

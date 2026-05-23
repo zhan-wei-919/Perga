@@ -6,33 +6,6 @@
 
 ---
 
-## 终端级选择复制系统未实现
-
-**现状**:普通滚动终端是 `[历史 DOM][活动区 DOM grid]`。历史区
-`web/src/render/history_view.tsx` 和活动区 `web/src/render/grid_dom.tsx` 都是
-DOM 文本,浏览器原生 selection 已经可以复制当前可见文本。`web/src/input/copy_shortcuts.ts`
-目前处理「已有 DOM 文本选区时 Ctrl/Cmd+C 走浏览器复制,否则 Ctrl+C 发 SIGINT」。
-
-**已知偏差**:
-
-- 浏览器原生复制只覆盖当前 DOM 中实际存在的可见文本;history 虚拟化窗口外的
-  行不会进入一次原生选区。
-- 复制结果没有终端语义归一化:宽字符 / `wide_spacer` / 行尾空白 / 矩形选区等
-  规则还没有统一坐标模型。
-- 还没有终端 selection overlay,无法支持拖拽自动滚动、双击选词、三击选行等
-  终端常见交互。
-
-**触发条件**:实现复制功能时。活动区已是 DOM grid,下一步做最小闭环:
-统一 history+grid 坐标模型、鼠标拖拽选区、overlay 高亮、`Ctrl/Cmd+C` 有终端
-选区时拼纯文本写入 clipboard、无选区时 `Ctrl+C` 继续发 SIGINT。先不做双击
-选词、三击选行、块选择和拖拽自动滚动。
-
-**涉及**:`web/src/ui/pane_leaf.tsx`,`web/src/render/history_view.tsx`,
-`web/src/render/grid_dom.tsx`,`web/src/state/history.ts`,
-`web/src/state/session_store.ts`,`web/src/input/copy_shortcuts.ts`。
-
----
-
 ## 前端鼠标上报未接入
 
 **现状**:后端 mouse 输入链路已存在:`crates/perga-server/src/wire.rs` 能解析

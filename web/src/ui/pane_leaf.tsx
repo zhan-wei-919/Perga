@@ -8,20 +8,35 @@
 
 import {
   Component,
+  For,
   createEffect,
+  createMemo,
   createSignal,
   onCleanup,
   onMount,
   Show,
 } from "solid-js";
 
-import { shouldBrowserHandleCopyShortcut } from "../input/copy_shortcuts";
+import {
+  copyTextToClipboard,
+  isPlainCopyShortcut,
+} from "../input/copy_shortcuts";
 import { encodeKeyboardEvent } from "../input/keyboard";
 import { shouldBrowserHandlePasteShortcut } from "../input/paste_shortcuts";
 import { observeContainerResize } from "../input/resize";
+import {
+  clearBrowserSelection,
+  isCollapsedSelection,
+  pointFromContentOffset,
+  selectedText,
+  selectionRects,
+  terminalDisplayRowCount,
+  type SelectionPoint,
+  type TerminalSelection,
+} from "../input/terminal_selection";
 import { GridDom } from "../render/grid_dom";
 import { HISTORY_GUTTER_PX, HistoryView } from "../render/history_view";
-import { cellsForBox, measureCell } from "../render/metrics";
+import { cellsForBox, measureCell, type CellMetrics } from "../render/metrics";
 import { useSettings } from "../state/settings_context";
 import type { LeafSession } from "../state/workspace";
 
@@ -45,6 +60,8 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
   // 虚拟历史列表要据滚动位置 / 视口高算可见窗口。
   const [scrollTop, setScrollTop] = createSignal(0);
   const [viewportH, setViewportH] = createSignal(0);
+  const [cellMetrics, setCellMetrics] = createSignal<CellMetrics | null>(null);
+  const [selection, setSelection] = createSignal<TerminalSelection | null>(null);
 
   // 自动滚到底:有新内容时把活动区 grid 滚进视野;用户手动上滚后暂停,
   // 滚回底部恢复。标准终端行为。
@@ -57,6 +74,71 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
       if (containerRef && stickToBottom) {
         containerRef.scrollTop = containerRef.scrollHeight;
       }
+    });
+  };
+
+  const displayRowCount = (): number =>
+    terminalDisplayRowCount(
+      session.store.state.historyLen,
+      session.store.state.size.rows,
+      session.store.state.modes.alt_screen,
+    );
+
+  const textLeftPx = (): number =>
+    session.store.state.modes.alt_screen ? 0 : HISTORY_GUTTER_PX;
+
+  const overlayRects = createMemo(() => {
+    const metrics = cellMetrics();
+    const current = selection();
+    if (!metrics || !current) return [];
+    const visibleStartRow = Math.floor(scrollTop() / metrics.cellH) - 1;
+    const visibleEndRow =
+      Math.ceil((scrollTop() + viewportH()) / metrics.cellH) + 1;
+    return selectionRects(current, {
+      rowCount: displayRowCount(),
+      cols: session.store.state.size.cols,
+      cellW: metrics.cellW,
+      cellH: metrics.cellH,
+      textLeftPx: textLeftPx(),
+      visibleStartRow,
+      visibleEndRow,
+    });
+  });
+
+  const pointForPointer = (
+    e: PointerEvent,
+    anchor?: SelectionPoint,
+  ): SelectionPoint | null => {
+    const metrics = cellMetrics();
+    const el = containerRef;
+    if (!metrics || !el) return null;
+    const box = el.getBoundingClientRect();
+    return pointFromContentOffset(
+      e.clientX - box.left,
+      e.clientY - box.top + el.scrollTop,
+      {
+        rowCount: displayRowCount(),
+        cols: session.store.state.size.cols,
+        cellW: metrics.cellW,
+        cellH: metrics.cellH,
+        textLeftPx: textLeftPx(),
+      },
+      anchor,
+    );
+  };
+
+  const copySelection = (): void => {
+    const text = selectedText(selection(), {
+      history: session.store.history,
+      grid: session.store.grid,
+      historyLen: session.store.state.historyLen,
+      gridRows: session.store.state.size.rows,
+      cols: session.store.state.size.cols,
+      altScreen: session.store.state.modes.alt_screen,
+    });
+    if (text.length === 0) return;
+    void copyTextToClipboard(text).catch((err) => {
+      console.warn("terminal.copy_failed", err);
     });
   };
 
@@ -74,14 +156,26 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
       settings.fontFamily(),
       settings.effectiveFontSize(),
     );
+    setCellMetrics(metrics);
     const { rows, cols } = cellsForBox(gridHost.getBoundingClientRect(), metrics);
     session.connect(rows, cols);
     setViewportH(el.clientHeight);
 
     // 终端输入监听挂在**容器元素**上(不挂 document)。
     const onKeyDown = (e: KeyboardEvent): void => {
-      // 有文本选区时 Ctrl/Cmd+C 让浏览器复制,不编码成 SIGINT。
-      if (shouldBrowserHandleCopyShortcut(e, el)) return;
+      if (isPlainCopyShortcut(e)) {
+        const hasTerminalSelection = selection() !== null;
+        if (hasTerminalSelection) {
+          e.preventDefault();
+          copySelection();
+          return;
+        }
+        // Cmd+C 是系统复制语义;无终端选区时也不要降级成字面 c。
+        if (e.metaKey) {
+          e.preventDefault();
+          return;
+        }
+      }
       // 粘贴走浏览器默认路径触发 ClipboardEvent("paste"),由 onPaste 统一发后端。
       if (shouldBrowserHandlePasteShortcut(e)) return;
       const msg = encodeKeyboardEvent(e);
@@ -105,9 +199,40 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
       hasDomFocus = false;
       session.send({ type: "focus", gained: false });
     };
-    const onPointerDown = (): void => {
+    let selectingPointer: number | null = null;
+    let selectionAnchor: SelectionPoint | null = null;
+    const onPointerDown = (e: PointerEvent): void => {
       props.onFocusRequest();
       el.focus();
+      if (e.button !== 0) return;
+      const anchor = pointForPointer(e);
+      if (!anchor) return;
+      e.preventDefault();
+      clearBrowserSelection();
+      selectingPointer = e.pointerId;
+      selectionAnchor = anchor;
+      setSelection({ anchor, head: anchor });
+      el.setPointerCapture(e.pointerId);
+    };
+    const onPointerMove = (e: PointerEvent): void => {
+      if (selectingPointer !== e.pointerId || !selectionAnchor) return;
+      const head = pointForPointer(e, selectionAnchor);
+      if (!head) return;
+      e.preventDefault();
+      clearBrowserSelection();
+      setSelection({ anchor: selectionAnchor, head });
+    };
+    const finishPointerSelection = (e: PointerEvent): void => {
+      if (selectingPointer !== e.pointerId) return;
+      e.preventDefault();
+      clearBrowserSelection();
+      selectingPointer = null;
+      selectionAnchor = null;
+      if (el.hasPointerCapture(e.pointerId)) {
+        el.releasePointerCapture(e.pointerId);
+      }
+      const current = selection();
+      if (!current || isCollapsedSelection(current)) setSelection(null);
     };
     let scrollSyncRaf: number | undefined;
     const onScroll = (): void => {
@@ -127,6 +252,9 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
     el.addEventListener("focus", onFocus);
     el.addEventListener("blur", onBlur);
     el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", finishPointerSelection);
+    el.addEventListener("pointercancel", finishPointerSelection);
     el.addEventListener("scroll", onScroll);
 
     onCleanup(() => {
@@ -137,6 +265,9 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
       el.removeEventListener("focus", onFocus);
       el.removeEventListener("blur", onBlur);
       el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", finishPointerSelection);
+      el.removeEventListener("pointercancel", finishPointerSelection);
       el.removeEventListener("scroll", onScroll);
       // 卸载时仍持有焦点就显式补发 focus lost,否则后台 PTY 一直以为自己 focused。
       if (hasDomFocus) session.send({ type: "focus", gained: false });
@@ -153,6 +284,7 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
       settings.fontFamily(),
       settings.effectiveFontSize(),
     );
+    setCellMetrics(metrics);
     const gridHost = gridHostRef;
     if (!gridHost) return;
     const watcher = observeContainerResize(gridHost, metrics, (r, c) => {
@@ -179,6 +311,20 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
     ) {
       containerRef.focus();
     }
+  });
+
+  let lastSelectionShape = "";
+  createEffect(() => {
+    const shape = [
+      session.store.state.historyLen,
+      session.store.state.size.rows,
+      session.store.state.size.cols,
+      session.store.state.modes.alt_screen,
+    ].join(":");
+    if (lastSelectionShape !== "" && lastSelectionShape !== shape) {
+      setSelection(null);
+    }
+    lastSelectionShape = shape;
   });
 
   // 内容增高(新输出 / 历史增长)时贴底滚动。读 seq / historyLen 让本 effect
@@ -219,9 +365,20 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
           onRenderCancelled={() => session.reportRenderCancelled()}
         />
       </div>
+      <SelectionOverlay rects={overlayRects()} />
     </div>
   );
 };
+
+const SelectionOverlay: Component<{ rects: ReturnType<typeof selectionRects> }> = (
+  props,
+) => (
+  <div style={selectionOverlayStyle}>
+    <For each={props.rects}>
+      {(rect) => <div style={selectionRectStyle(rect)} />}
+    </For>
+  </div>
+);
 
 /// SSH 连接 / 认证失败的内嵌横幅。pane 顶部贴一条,可读地展示后端发来的
 /// 错误原因 —— 否则用户只看到一个空白 grid + 关闭的 WS。
@@ -251,6 +408,29 @@ const bannerBodyStyle: Record<string, string> = {
   "word-break": "break-word",
 };
 
+const selectionOverlayStyle: Record<string, string> = {
+  position: "absolute",
+  left: "0",
+  top: "0",
+  right: "0",
+  bottom: "0",
+  "pointer-events": "none",
+  "z-index": "2",
+};
+
+function selectionRectStyle(
+  rect: ReturnType<typeof selectionRects>[number],
+): Record<string, string> {
+  return {
+    position: "absolute",
+    top: `${rect.top}px`,
+    left: `${rect.left}px`,
+    width: `${rect.width}px`,
+    height: `${rect.height}px`,
+    background: "var(--pg-selection-bg)",
+  };
+}
+
 /// 活动区 grid 宿主。非 alt-screen 时左移一个 gutter 宽,使活动区文本列与
 /// 历史文本列对齐(历史行左侧那条 gutter 是失败标记位)。
 function gridHostStyle(altScreen: boolean): Record<string, string> {
@@ -266,12 +446,15 @@ function gridHostStyle(altScreen: boolean): Record<string, string> {
 /// 永远 focused,opacity 恒 1,自然无变暗。
 function containerStyle(focused: boolean): Record<string, string> {
   return {
+    position: "relative",
     width: "100%",
     height: "100%",
     "overflow-y": "auto",
     "overflow-x": "hidden",
     background: "var(--term-background)",
     outline: "none",
+    "user-select": "none",
+    "-webkit-user-select": "none",
     opacity: focused ? "1" : "0.6",
     transition: "opacity 0.12s ease",
   };

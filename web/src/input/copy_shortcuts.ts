@@ -1,20 +1,6 @@
-// Ctrl/Cmd+C 在终端里有双重语义:有选区时复制,否则 Ctrl+C 应发 SIGINT。
-//
-// 这个判断必须限定到当前 pane:浏览器 selection 是全局状态,如果只看
-// `window.getSelection().isCollapsed`,页面里残留的旧选区会把终端 Ctrl+C
-// 永久挡掉。
+// Ctrl/Cmd+C 在终端里有双重语义:有终端选区时复制,否则 Ctrl+C 发 SIGINT。
 
-export function shouldBrowserHandleCopyShortcut(
-  e: KeyboardEvent,
-  root: HTMLElement,
-): boolean {
-  if (!isPlainCopyShortcut(e)) return false;
-  // Cmd+C 是浏览器/系统复制语义,不要降级成向 PTY 发送字面 c。
-  if (e.metaKey) return true;
-  return hasCopyableSelectionInside(root);
-}
-
-function isPlainCopyShortcut(e: KeyboardEvent): boolean {
+export function isPlainCopyShortcut(e: KeyboardEvent): boolean {
   return (
     (e.ctrlKey || e.metaKey) &&
     !e.shiftKey &&
@@ -23,30 +9,39 @@ function isPlainCopyShortcut(e: KeyboardEvent): boolean {
   );
 }
 
-function hasCopyableSelectionInside(root: HTMLElement): boolean {
-  const selection = window.getSelection();
-  if (!selection || selection.isCollapsed || selection.toString().length === 0) {
-    return false;
+export async function copyTextToClipboard(text: string): Promise<void> {
+  if (text.length === 0) return;
+
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Tauri/WebKitGTK dev builds can deny Clipboard API; textarea fallback keeps
+      // the shortcut usable without sending Ctrl+C to the PTY.
+    }
   }
 
-  for (let i = 0; i < selection.rangeCount; i++) {
-    const range = selection.getRangeAt(i);
-    if (range.collapsed || range.toString().length === 0) continue;
-    if (rangeIntersectsElement(range, root)) return true;
-  }
-  return false;
+  copyWithTextarea(text);
 }
 
-function rangeIntersectsElement(range: Range, root: HTMLElement): boolean {
+function copyWithTextarea(text: string): void {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  Object.assign(textarea.style, {
+    position: "fixed",
+    top: "-1000px",
+    left: "0",
+    width: "1px",
+    height: "1px",
+    opacity: "0",
+  });
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
   try {
-    if (range.intersectsNode(root)) return true;
-  } catch {
-    // Some DOM implementations throw for detached nodes; fall through to the
-    // ancestor check below.
+    document.execCommand("copy");
+  } finally {
+    textarea.remove();
   }
-
-  const ancestor = range.commonAncestorContainer;
-  const node =
-    ancestor.nodeType === Node.ELEMENT_NODE ? ancestor : ancestor.parentNode;
-  return node !== null && root.contains(node);
 }

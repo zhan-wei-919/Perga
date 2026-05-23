@@ -1,4 +1,4 @@
-// 虚拟化的 DOM 历史列表 —— scrollback 在这里渲染成可选中复制的纯文本行。
+// 虚拟化的 DOM 历史列表 —— scrollback 在这里渲染成纯文本行。
 //
 // 历史可能上万行,只渲染当前可见窗口(屏高 + overscan):一个撑总高的 spacer
 // + 窗口内绝对定位的行。失败命令的行左侧 gutter 染红。
@@ -119,6 +119,7 @@ function textStyle(
     "font-size": `${fontSize}px`,
     "line-height": `${lineHeight}px`,
     "white-space": "pre",
-    "user-select": "text",
+    "user-select": "none",
+    "-webkit-user-select": "none",
   };
 }
