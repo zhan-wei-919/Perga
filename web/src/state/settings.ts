@@ -15,7 +15,7 @@ export type Settings = {
 };
 
 /// 基准字号(CSS 像素)。有效字号 = BASE_FONT_SIZE × zoomPercent / 100。
-export const BASE_FONT_SIZE = 14;
+export const BASE_FONT_SIZE = 16;
 export const ZOOM_MIN = 50;
 export const ZOOM_MAX = 200;
 export const ZOOM_STEP = 10;

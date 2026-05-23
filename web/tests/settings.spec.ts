@@ -1,8 +1,17 @@
 // 设置解析与缩放夹取(settings.ts)。纯函数单测。
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
-import { clampZoom, parseSettings } from "../src/state/settings";
+import {
+  BASE_FONT_SIZE,
+  clampZoom,
+  createSettings,
+  parseSettings,
+} from "../src/state/settings";
+
+beforeEach(() => {
+  localStorage.clear();
+});
 
 describe("clampZoom", () => {
   it("夹到 [50,200]", () => {
@@ -59,5 +68,13 @@ describe("parseSettings", () => {
     expect(parseSettings(JSON.stringify({ zoomPercent: 137 })).zoomPercent).toBe(
       140,
     );
+  });
+});
+
+describe("createSettings", () => {
+  it("默认有效字号使用基准字号", () => {
+    const settings = createSettings();
+
+    expect(settings.effectiveFontSize()).toBe(BASE_FONT_SIZE);
   });
 });
