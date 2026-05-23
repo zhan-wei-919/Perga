@@ -1,4 +1,4 @@
-// 用户设置 —— 缩放 / 主题,持久化到 localStorage。
+// 用户设置 —— 缩放 / 主题 / 字体,持久化到 localStorage。
 //
 // 边界验证只在这里做一次:`parseSettings` 把 localStorage 里可能被手改、跨版本
 // 漂移的原始字符串解析成干净的 `Settings`,逐字段独立兜底回默认。下游信任它。
@@ -6,12 +6,14 @@
 
 import { createStore } from "solid-js/store";
 
-import type { ThemeId } from "../render/theme";
+import { FONT_IDS, type FontId, fontFamilyFor } from "../render/fonts";
+import { THEME_IDS, type ThemeId } from "../render/theme";
 
 export type Settings = {
   /** 缩放百分比,[50,200] 步进 10。 */
   zoomPercent: number;
   themeId: ThemeId;
+  fontId: FontId;
 };
 
 /// 基准字号(CSS 像素)。有效字号 = BASE_FONT_SIZE × zoomPercent / 100。
@@ -24,9 +26,11 @@ const STORAGE_KEY = "perga.settings";
 const DEFAULTS: Settings = {
   zoomPercent: 100,
   themeId: "dark",
+  fontId: "default",
 };
 
-const THEME_IDS = new Set<string>(["dark", "light"]);
+const VALID_THEME_IDS = new Set<string>(THEME_IDS);
+const VALID_FONT_IDS = new Set<string>(FONT_IDS);
 
 /// 夹到 [ZOOM_MIN, ZOOM_MAX] 并吸附到步进。非有限数 → 默认 100。
 export function clampZoom(pct: number): number {
@@ -52,9 +56,13 @@ export function parseSettings(raw: string | null): Settings {
         ? clampZoom(o.zoomPercent)
         : DEFAULTS.zoomPercent,
     themeId:
-      typeof o.themeId === "string" && THEME_IDS.has(o.themeId)
+      typeof o.themeId === "string" && VALID_THEME_IDS.has(o.themeId)
         ? (o.themeId as ThemeId)
         : DEFAULTS.themeId,
+    fontId:
+      typeof o.fontId === "string" && VALID_FONT_IDS.has(o.fontId)
+        ? (o.fontId as FontId)
+        : DEFAULTS.fontId,
   };
 }
 
@@ -63,11 +71,14 @@ export type SettingsStore = {
   state: Settings;
   /** 当前有效字号(CSS 像素),响应式。 */
   effectiveFontSize: () => number;
+  /** 当前终端字体栈,响应式。 */
+  fontFamily: () => string;
   setZoom: (pct: number) => void;
   zoomIn: () => void;
   zoomOut: () => void;
   zoomReset: () => void;
   setTheme: (id: ThemeId) => void;
+  setFont: (id: FontId) => void;
 };
 
 /// 建设置 store。启动时从 localStorage 读取并校验。
@@ -91,12 +102,17 @@ export function createSettings(): SettingsStore {
     state,
     effectiveFontSize: () =>
       Math.round((BASE_FONT_SIZE * state.zoomPercent) / 100),
+    fontFamily: () => fontFamilyFor(state.fontId),
     setZoom,
     zoomIn: () => setZoom(state.zoomPercent + ZOOM_STEP),
     zoomOut: () => setZoom(state.zoomPercent - ZOOM_STEP),
     zoomReset: () => setZoom(100),
     setTheme: (id) => {
       setState("themeId", id);
+      persist();
+    },
+    setFont: (id) => {
+      setState("fontId", id);
       persist();
     },
   };

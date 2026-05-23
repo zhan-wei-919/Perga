@@ -9,6 +9,7 @@ const METRICS: CellMetrics = {
   baseline: 4,
   fontFamily: "monospace",
   fontSize: 10,
+  fixedPitch: true,
 };
 
 const originalResizeObserver = globalThis.ResizeObserver;

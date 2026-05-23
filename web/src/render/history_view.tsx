@@ -11,7 +11,6 @@ import { For, type Component, createMemo } from "solid-js";
 import type { HistoryBuffer } from "../state/history";
 import { computeWindow } from "../state/history";
 import { useSettings } from "../state/settings_context";
-import { FONT_FAMILY } from "./metrics";
 import { segmentStyle, segmentsForRow } from "./row_segments";
 
 /// 历史行左侧 gutter 宽度(失败标记占这条)。活动区 grid 左移同样的量对齐。
@@ -72,7 +71,11 @@ export const HistoryView: Component<HistoryViewProps> = (props) => {
             >
               <div style={gutterStyle(failed())} />
               <div
-                style={textStyle(settings.effectiveFontSize(), lineHeight())}
+                style={textStyle(
+                  settings.fontFamily(),
+                  settings.effectiveFontSize(),
+                  lineHeight(),
+                )}
               >
                 <For each={segmentsForRow(row.cells)}>
                   {(seg) => <span style={segmentStyle(seg)}>{seg.text}</span>}
@@ -105,13 +108,14 @@ function gutterStyle(failed: boolean): Record<string, string> {
 }
 
 function textStyle(
+  fontFamily: string,
   fontSize: number,
   lineHeight: number,
 ): Record<string, string> {
   return {
     flex: "1",
     "min-width": "0",
-    "font-family": FONT_FAMILY,
+    "font-family": fontFamily,
     "font-size": `${fontSize}px`,
     "line-height": `${lineHeight}px`,
     "white-space": "pre",

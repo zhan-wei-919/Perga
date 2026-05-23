@@ -5,6 +5,7 @@ import {
   debugGridRowSegments,
   gridDomSize,
   segmentsForGridRow,
+  terminalTextClusters,
 } from "../src/render/grid_dom";
 import type { Cell, Color } from "../src/state/protocol";
 
@@ -181,5 +182,14 @@ describe("cursorOverlayModel", () => {
       marginTop: 16,
       text: "",
     });
+  });
+});
+
+describe("terminalTextClusters", () => {
+  it("keeps combining marks attached to their base glyph", () => {
+    expect(terminalTextClusters("e" + ACUTE + "x")).toEqual([
+      "e" + ACUTE,
+      "x",
+    ]);
   });
 });

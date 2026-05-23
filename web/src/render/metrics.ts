@@ -7,10 +7,6 @@
 // `canvas.measureText`。原因是 canvas measureText 在不同浏览器对 line-height
 // 处理不一致,getBoundingClientRect 给的是真实布局尺寸。
 
-/// 终端字体栈。活动区与历史区共用,保证视觉一致。
-export const FONT_FAMILY =
-  '"DejaVu Sans Mono", "Liberation Mono", "Cascadia Mono", "Cascadia Code", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace';
-
 export type CellMetrics = {
   /** Cell 宽度(CSS 像素)。一个单宽 ASCII char 占的水平距离。 */
   cellW: number;
@@ -22,9 +18,12 @@ export type CellMetrics = {
   fontFamily: string;
   /** 度量时用的 font-size(CSS 像素)。 */
   fontSize: number;
+  /** 实际命中的 Latin 字体是否表现为等宽。 */
+  fixedPitch: boolean;
 };
 
 const PROBE_LEN = 100;
+const FIXED_PITCH_EPSILON = 0.25;
 
 /// 测量给定字体的 cell 尺寸。同步,代价 ~1 帧 reflow。
 ///
@@ -47,24 +46,36 @@ export function measureCell(fontFamily: string, fontSize: number): CellMetrics {
   probe.style.lineHeight = `${lineHeight}px`;
   probe.style.whiteSpace = "pre";
   probe.style.fontVariantLigatures = "none";
+  document.body.appendChild(probe);
+
   // 单元格宽度必须由 Latin monospace 决定。CJK fallback 偏宽时不能反过来
   // 放大全部 ASCII cell,否则 prompt / ls 列 / 光标都会漂。
   // 用 'M' 而不是 'a':宽度更稳定(部分字体的 'a' 比平均值窄)。
-  probe.textContent = "M".repeat(PROBE_LEN);
-  document.body.appendChild(probe);
-  const latinRect = probe.getBoundingClientRect();
+  const mWidth = measuredProbeWidth(probe, "M");
+  const fixedPitch = isFixedPitchWidths([
+    mWidth,
+    measuredProbeWidth(probe, "i"),
+    measuredProbeWidth(probe, "z"),
+    measuredProbeWidth(probe, "0"),
+  ]);
   document.body.removeChild(probe);
 
   // baseline = fontSize * 0.8 是大多数 monospace 字体的近似 ascent。
   // 精确值要去解析字体 metrics(canvas measureText 的 alphabeticBaseline
   // 给得不全),Phase 1 用近似,够看就行。
   return {
-    cellW: measuredCellWidth(latinRect.width, PROBE_LEN),
+    cellW: measuredCellWidth(mWidth, PROBE_LEN),
     cellH: lineHeight,
     baseline: Math.round(fontSize * 0.82),
     fontFamily,
     fontSize,
+    fixedPitch,
   };
+}
+
+function measuredProbeWidth(probe: HTMLSpanElement, ch: string): number {
+  probe.textContent = ch.repeat(PROBE_LEN);
+  return probe.getBoundingClientRect().width;
 }
 
 export function measuredCellWidth(
@@ -72,6 +83,14 @@ export function measuredCellWidth(
   latinCount: number,
 ): number {
   return latinWidth / latinCount;
+}
+
+export function isFixedPitchWidths(widths: number[]): boolean {
+  if (widths.length === 0) return true;
+  const cellWidths = widths.map((w) => measuredCellWidth(w, PROBE_LEN));
+  const min = Math.min(...cellWidths);
+  const max = Math.max(...cellWidths);
+  return max - min <= FIXED_PITCH_EPSILON;
 }
 
 /// 一个像素盒子能装下多少 cell(rows × cols)。

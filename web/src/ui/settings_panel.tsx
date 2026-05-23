@@ -1,4 +1,4 @@
-// 设置面板内容 —— 缩放 / 主题 / 远程主机(SSH profile CRUD)。挂在 `Modal` 里。
+// 设置面板内容 —— 缩放 / 主题 / 字体 / 远程主机(SSH profile CRUD)。挂在 `Modal` 里。
 //
 // 缩放滑块:label 实时跟手,但真正提交给 settings(触发 re-measure + resize +
 // DOM grid 整屏更新)做 120ms trailing debounce,避免拖动时连环重排。
@@ -16,7 +16,8 @@ import {
   createSignal,
 } from "solid-js";
 
-import { THEME_IDS, type ThemeId } from "../render/theme";
+import { FONT_IDS, FONT_PRESETS, type FontId } from "../render/fonts";
+import { THEME_IDS, THEMES, type ThemeId } from "../render/theme";
 import {
   type HostProfileBody,
   type HostProfileSummary,
@@ -33,6 +34,22 @@ import { HostForm, emptyProfile, profileToBody } from "./host_form";
 const THEME_LABELS: Record<ThemeId, string> = {
   dark: "深色",
   light: "浅色",
+  classic: "经典",
+  solarizedDark: "Solarized",
+  gruvboxDark: "Gruvbox",
+  highContrast: "高对比",
+};
+
+const FONT_LABELS: Record<FontId, string> = {
+  default: "默认",
+  compact: "紧凑",
+  cjk: "中文",
+};
+
+const FONT_SAMPLES: Record<FontId, string> = {
+  default: "Aa 中 123",
+  compact: "Aa 中 123",
+  cjk: "Aa 中 123",
 };
 
 const ZOOM_COMMIT_DELAY = 120;
@@ -150,7 +167,7 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
         <div style={labelRowStyle}>
           <span>主题</span>
         </div>
-        <div style={{ display: "flex", gap: "8px" }}>
+        <div style={choiceGridStyle("2")}>
           <For each={THEME_IDS}>
             {(id) => (
               <button
@@ -158,7 +175,32 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
                 style={choiceStyle(settings.state.themeId === id)}
                 onClick={() => settings.setTheme(id)}
               >
-                {THEME_LABELS[id]}
+                <span>{THEME_LABELS[id]}</span>
+                <span style={themeSwatchesStyle}>
+                  <span style={themeSwatchStyle(THEMES[id].term.background)} />
+                  <span style={themeSwatchStyle(THEMES[id].term.foreground)} />
+                  <span style={themeSwatchStyle(THEMES[id].chrome.accent)} />
+                </span>
+              </button>
+            )}
+          </For>
+        </div>
+      </section>
+
+      <section style={sectionStyle}>
+        <div style={labelRowStyle}>
+          <span>字体</span>
+        </div>
+        <div style={choiceGridStyle("3")}>
+          <For each={FONT_IDS}>
+            {(id) => (
+              <button
+                type="button"
+                style={choiceStyle(settings.state.fontId === id)}
+                onClick={() => settings.setFont(id)}
+              >
+                <span>{FONT_LABELS[id]}</span>
+                <span style={fontPreviewStyle(id)}>{FONT_SAMPLES[id]}</span>
               </button>
             )}
           </For>
@@ -444,10 +486,17 @@ const addButtonStyle: Record<string, string> = {
   color: "var(--pg-accent)",
 };
 
+function choiceGridStyle(cols: string): Record<string, string> {
+  return {
+    display: "grid",
+    "grid-template-columns": `repeat(${cols}, minmax(0, 1fr))`,
+    gap: "8px",
+  };
+}
+
 /// 单选项按钮(等宽平分)。
 function choiceStyle(active: boolean): Record<string, string> {
   return {
-    flex: "1",
     display: "flex",
     "flex-direction": "column",
     "align-items": "flex-start",
@@ -463,5 +512,31 @@ function choiceStyle(active: boolean): Record<string, string> {
       : "1px solid var(--pg-overlay-border)",
     background: active ? "var(--pg-overlay-hover)" : "transparent",
     color: "var(--term-foreground)",
+  };
+}
+
+const themeSwatchesStyle: Record<string, string> = {
+  display: "flex",
+  gap: "4px",
+  "margin-top": "2px",
+};
+
+function themeSwatchStyle(color: string): Record<string, string> {
+  return {
+    display: "block",
+    width: "18px",
+    height: "10px",
+    "border-radius": "2px",
+    border: "1px solid var(--pg-overlay-border)",
+    background: color,
+  };
+}
+
+function fontPreviewStyle(id: FontId): Record<string, string> {
+  return {
+    "font-family": FONT_PRESETS[id].family,
+    "font-size": "12px",
+    color: "var(--pg-fg-dim)",
+    "white-space": "nowrap",
   };
 }

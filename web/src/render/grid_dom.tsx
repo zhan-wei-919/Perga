@@ -29,7 +29,7 @@ import {
   type BoxDrawingStem,
   type BoxDrawingWeight,
 } from "./box_drawing";
-import { type CellMetrics, FONT_FAMILY, measureCell } from "./metrics";
+import { type CellMetrics, measureCell } from "./metrics";
 import { colorToDomCss } from "./palette";
 import { segmentStyle } from "./row_segments";
 
@@ -88,7 +88,15 @@ export const GridDom: Component<GridDomProps> = (props) => {
   let cursorRef: HTMLDivElement | undefined;
   let metrics: CellMetrics | undefined;
   let lastSynced:
-    | { rows: number; cols: number; cellW: number; cellH: number; fontSize: number }
+    | {
+        rows: number;
+        cols: number;
+        cellW: number;
+        cellH: number;
+        fontFamily: string;
+        fontSize: number;
+        fixedPitch: boolean;
+      }
     | undefined;
   const rowElements: HTMLDivElement[] = [];
   const lastDrawnGen: number[] = [];
@@ -99,8 +107,9 @@ export const GridDom: Component<GridDomProps> = (props) => {
 
   createEffect(() => {
     const fontSize = settings.effectiveFontSize();
+    const fontFamily = settings.fontFamily();
     if (!rootRef) return;
-    metrics = measureCell(FONT_FAMILY, fontSize);
+    metrics = measureCell(fontFamily, fontSize);
     lastSynced = undefined;
     lastDrawnGen.length = 0;
     lastRowSignatures.length = 0;
@@ -188,7 +197,9 @@ export const GridDom: Component<GridDomProps> = (props) => {
       prev.cols === size.cols &&
       prev.cellW === metrics.cellW &&
       prev.cellH === metrics.cellH &&
-      prev.fontSize === metrics.fontSize
+      prev.fontFamily === metrics.fontFamily &&
+      prev.fontSize === metrics.fontSize &&
+      prev.fixedPitch === metrics.fixedPitch
     ) {
       return false;
     }
@@ -204,7 +215,9 @@ export const GridDom: Component<GridDomProps> = (props) => {
       cols: size.cols,
       cellW: metrics.cellW,
       cellH: metrics.cellH,
+      fontFamily: metrics.fontFamily,
       fontSize: metrics.fontSize,
+      fixedPitch: metrics.fixedPitch,
     };
     lastDrawnGen.length = 0;
     lastRowSignatures.length = 0;
@@ -511,10 +524,58 @@ function segmentElement(seg: GridRowSegment, metrics: CellMetrics): HTMLSpanElem
     renderBoxDrawingRun(span, seg.text, metrics);
   } else if (isBlockElementRun(seg.text)) {
     renderBlockElementRun(span, seg.text, metrics);
+  } else if (!metrics.fixedPitch) {
+    renderCellDistributedTextRun(span, seg.text, seg.widthCells, metrics);
   } else {
     span.textContent = seg.text;
   }
   return span;
+}
+
+export function terminalTextClusters(text: string): string[] {
+  const clusters: string[] = [];
+  for (const ch of text) {
+    if (isCombiningMark(ch) && clusters.length > 0) {
+      clusters[clusters.length - 1] += ch;
+    } else {
+      clusters.push(ch);
+    }
+  }
+  return clusters;
+}
+
+function isCombiningMark(ch: string): boolean {
+  return /\p{Mark}/u.test(ch);
+}
+
+function renderCellDistributedTextRun(
+  span: HTMLSpanElement,
+  text: string,
+  widthCells: number,
+  metrics: CellMetrics,
+): void {
+  const clusters = terminalTextClusters(text);
+  if (clusters.length === 0) return;
+
+  const frag = document.createDocumentFragment();
+  const cellsPerCluster = widthCells / clusters.length;
+  clusters.forEach((cluster, index) => {
+    const glyph = document.createElement("span");
+    Object.assign(glyph.style, {
+      position: "absolute",
+      left: `${index * cellsPerCluster * metrics.cellW}px`,
+      top: "0",
+      display: "inline-block",
+      width: `${cellsPerCluster * metrics.cellW}px`,
+      height: `${metrics.cellH}px`,
+      lineHeight: `${metrics.cellH}px`,
+      overflow: "hidden",
+      whiteSpace: "pre",
+    });
+    glyph.textContent = cluster;
+    frag.appendChild(glyph);
+  });
+  span.replaceChildren(frag);
 }
 
 function renderBlockElementRun(

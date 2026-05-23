@@ -1,4 +1,4 @@
-// 主题 —— 终端 16 色调色板 + UI chrome 配色,深 / 浅各一套。
+// 主题 —— 终端 16 色调色板 + UI chrome 配色。
 //
 // 一个 `Theme` 同时驱动两处:
 //   1. 终端调色板(`term`)—— DOM 终端文本的字符颜色。
@@ -9,9 +9,22 @@
 
 import type { NamedColor } from "../state/protocol";
 
-export type ThemeId = "dark" | "light";
+export type ThemeId =
+  | "dark"
+  | "light"
+  | "classic"
+  | "solarizedDark"
+  | "gruvboxDark"
+  | "highContrast";
 
-export const THEME_IDS: ThemeId[] = ["dark", "light"];
+export const THEME_IDS: ThemeId[] = [
+  "dark",
+  "light",
+  "classic",
+  "solarizedDark",
+  "gruvboxDark",
+  "highContrast",
+];
 
 /// chrome CSS 变量名(不含 `--pg-` 前缀)。基础 bg/fg 直接复用
 /// `--term-background` / `--term-foreground`,不在此重复定义。
@@ -140,7 +153,214 @@ const LIGHT: ThemeDef = {
   },
 };
 
-export const THEMES: Record<ThemeId, ThemeDef> = { dark: DARK, light: LIGHT };
+const CLASSIC: ThemeDef = {
+  term: {
+    black: "#000000",
+    red: "#cc0000",
+    green: "#4e9a06",
+    yellow: "#c4a000",
+    blue: "#3465a4",
+    magenta: "#75507b",
+    cyan: "#06989a",
+    white: "#d3d7cf",
+    bright_black: "#555753",
+    bright_red: "#ef2929",
+    bright_green: "#8ae234",
+    bright_yellow: "#fce94f",
+    bright_blue: "#729fcf",
+    bright_magenta: "#ad7fa8",
+    bright_cyan: "#34e2e2",
+    bright_white: "#eeeeec",
+    foreground: "#f2f2f2",
+    background: "#000000",
+    cursor: "#f2f2f2",
+    dim_black: "#000000",
+    dim_red: "#7a0000",
+    dim_green: "#2f5c04",
+    dim_yellow: "#766000",
+    dim_blue: "#1f3d63",
+    dim_magenta: "#46304a",
+    dim_cyan: "#045b5c",
+    dim_white: "#7e817c",
+    bright_foreground: "#ffffff",
+    dim_foreground: "#8a8a8a",
+  },
+  chrome: {
+    "fg-dim": "#8a8a8a",
+    "tabbar-bg": "#111111",
+    "tabbar-border": "#000000",
+    "tab-active-bg": "#000000",
+    "tab-active-fg": "#ffffff",
+    "tab-inactive-bg": "#191919",
+    "tab-inactive-fg": "#a0a0a0",
+    gutter: "#202020",
+    accent: "#729fcf",
+    "exit-fail": "#ef2929",
+    "overlay-bg": "#111111",
+    "overlay-border": "#343434",
+    "overlay-hover": "#1f1f1f",
+    backdrop: "rgba(0,0,0,0.62)",
+  },
+};
+
+const SOLARIZED_DARK: ThemeDef = {
+  term: {
+    black: "#073642",
+    red: "#dc322f",
+    green: "#859900",
+    yellow: "#b58900",
+    blue: "#268bd2",
+    magenta: "#d33682",
+    cyan: "#2aa198",
+    white: "#eee8d5",
+    bright_black: "#586e75",
+    bright_red: "#cb4b16",
+    bright_green: "#586e75",
+    bright_yellow: "#657b83",
+    bright_blue: "#839496",
+    bright_magenta: "#6c71c4",
+    bright_cyan: "#93a1a1",
+    bright_white: "#fdf6e3",
+    foreground: "#839496",
+    background: "#002b36",
+    cursor: "#93a1a1",
+    dim_black: "#04262e",
+    dim_red: "#84201d",
+    dim_green: "#505c00",
+    dim_yellow: "#6d5200",
+    dim_blue: "#17537e",
+    dim_magenta: "#7e204e",
+    dim_cyan: "#19615b",
+    dim_white: "#8f8b80",
+    bright_foreground: "#fdf6e3",
+    dim_foreground: "#586e75",
+  },
+  chrome: {
+    "fg-dim": "#586e75",
+    "tabbar-bg": "#073642",
+    "tabbar-border": "#00212a",
+    "tab-active-bg": "#002b36",
+    "tab-active-fg": "#eee8d5",
+    "tab-inactive-bg": "#0d3f4c",
+    "tab-inactive-fg": "#839496",
+    gutter: "#073642",
+    accent: "#268bd2",
+    "exit-fail": "#dc322f",
+    "overlay-bg": "#073642",
+    "overlay-border": "#164b59",
+    "overlay-hover": "#0d3f4c",
+    backdrop: "rgba(0,20,26,0.62)",
+  },
+};
+
+const GRUVBOX_DARK: ThemeDef = {
+  term: {
+    black: "#282828",
+    red: "#cc241d",
+    green: "#98971a",
+    yellow: "#d79921",
+    blue: "#458588",
+    magenta: "#b16286",
+    cyan: "#689d6a",
+    white: "#a89984",
+    bright_black: "#928374",
+    bright_red: "#fb4934",
+    bright_green: "#b8bb26",
+    bright_yellow: "#fabd2f",
+    bright_blue: "#83a598",
+    bright_magenta: "#d3869b",
+    bright_cyan: "#8ec07c",
+    bright_white: "#ebdbb2",
+    foreground: "#ebdbb2",
+    background: "#282828",
+    cursor: "#ebdbb2",
+    dim_black: "#181818",
+    dim_red: "#7a1611",
+    dim_green: "#5b5a10",
+    dim_yellow: "#815c14",
+    dim_blue: "#294f52",
+    dim_magenta: "#6a3b50",
+    dim_cyan: "#3e5e40",
+    dim_white: "#655c4f",
+    bright_foreground: "#fbf1c7",
+    dim_foreground: "#928374",
+  },
+  chrome: {
+    "fg-dim": "#928374",
+    "tabbar-bg": "#1d2021",
+    "tabbar-border": "#141617",
+    "tab-active-bg": "#282828",
+    "tab-active-fg": "#fbf1c7",
+    "tab-inactive-bg": "#32302f",
+    "tab-inactive-fg": "#a89984",
+    gutter: "#3c3836",
+    accent: "#83a598",
+    "exit-fail": "#fb4934",
+    "overlay-bg": "#32302f",
+    "overlay-border": "#504945",
+    "overlay-hover": "#3c3836",
+    backdrop: "rgba(20,18,16,0.58)",
+  },
+};
+
+const HIGH_CONTRAST: ThemeDef = {
+  term: {
+    black: "#000000",
+    red: "#ff5f5f",
+    green: "#00ff87",
+    yellow: "#ffff5f",
+    blue: "#5fafff",
+    magenta: "#ff87ff",
+    cyan: "#00ffff",
+    white: "#e6e6e6",
+    bright_black: "#808080",
+    bright_red: "#ff8787",
+    bright_green: "#5fffaf",
+    bright_yellow: "#ffff87",
+    bright_blue: "#87c8ff",
+    bright_magenta: "#ffafff",
+    bright_cyan: "#5fffff",
+    bright_white: "#ffffff",
+    foreground: "#ffffff",
+    background: "#000000",
+    cursor: "#ffffff",
+    dim_black: "#000000",
+    dim_red: "#993939",
+    dim_green: "#009951",
+    dim_yellow: "#999939",
+    dim_blue: "#396999",
+    dim_magenta: "#995199",
+    dim_cyan: "#009999",
+    dim_white: "#8a8a8a",
+    bright_foreground: "#ffffff",
+    dim_foreground: "#b0b0b0",
+  },
+  chrome: {
+    "fg-dim": "#c0c0c0",
+    "tabbar-bg": "#000000",
+    "tabbar-border": "#ffffff",
+    "tab-active-bg": "#111111",
+    "tab-active-fg": "#ffffff",
+    "tab-inactive-bg": "#000000",
+    "tab-inactive-fg": "#d0d0d0",
+    gutter: "#ffffff",
+    accent: "#00ffff",
+    "exit-fail": "#ff5f5f",
+    "overlay-bg": "#000000",
+    "overlay-border": "#ffffff",
+    "overlay-hover": "#222222",
+    backdrop: "rgba(0,0,0,0.72)",
+  },
+};
+
+export const THEMES: Record<ThemeId, ThemeDef> = {
+  dark: DARK,
+  light: LIGHT,
+  classic: CLASSIC,
+  solarizedDark: SOLARIZED_DARK,
+  gruvboxDark: GRUVBOX_DARK,
+  highContrast: HIGH_CONTRAST,
+};
 
 /// 终端调色板:`NamedColor` → 具体颜色串。
 export type TermPalette = Record<NamedColor, string>;

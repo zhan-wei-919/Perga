@@ -21,7 +21,7 @@ import { shouldBrowserHandlePasteShortcut } from "../input/paste_shortcuts";
 import { observeContainerResize } from "../input/resize";
 import { GridDom } from "../render/grid_dom";
 import { HISTORY_GUTTER_PX, HistoryView } from "../render/history_view";
-import { cellsForBox, FONT_FAMILY, measureCell } from "../render/metrics";
+import { cellsForBox, measureCell } from "../render/metrics";
 import { useSettings } from "../state/settings_context";
 import type { LeafSession } from "../state/workspace";
 
@@ -70,7 +70,10 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
 
     // 初始 rows/cols 先于 connect ── WS query 要带它。resize watcher 不在这里
     // 建,改由下方 zoom effect 持有(zoom 变了要重测 metrics 重建)。
-    const metrics = measureCell(FONT_FAMILY, settings.effectiveFontSize());
+    const metrics = measureCell(
+      settings.fontFamily(),
+      settings.effectiveFontSize(),
+    );
     const { rows, cols } = cellsForBox(gridHost.getBoundingClientRect(), metrics);
     session.connect(rows, cols);
     setViewportH(el.clientHeight);
@@ -146,7 +149,10 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
   // 首次运行不补发:onMount 的 connect 已带初始尺寸。
   let firstSizeEffect = true;
   createEffect(() => {
-    const metrics = measureCell(FONT_FAMILY, settings.effectiveFontSize());
+    const metrics = measureCell(
+      settings.fontFamily(),
+      settings.effectiveFontSize(),
+    );
     const gridHost = gridHostRef;
     if (!gridHost) return;
     const watcher = observeContainerResize(gridHost, metrics, (r, c) => {
