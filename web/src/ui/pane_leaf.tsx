@@ -22,6 +22,14 @@ import {
   isPlainCopyShortcut,
 } from "../input/copy_shortcuts";
 import { encodeKeyboardEvent } from "../input/keyboard";
+import {
+  buildMouseMessage,
+  collectMouseMods,
+  decideMouseRouting,
+  pointerButton,
+  selectionPointToCell,
+  wheelLineSteps,
+} from "../input/mouse";
 import { shouldBrowserHandlePasteShortcut } from "../input/paste_shortcuts";
 import { observeContainerResize } from "../input/resize";
 import {
@@ -34,6 +42,7 @@ import {
   type SelectionPoint,
   type TerminalSelection,
 } from "../input/terminal_selection";
+import type { MouseButton, MouseKind } from "../state/wire";
 import { GridDom } from "../render/grid_dom";
 import { HISTORY_GUTTER_PX, HistoryView } from "../render/history_view";
 import { cellsForBox, measureCell, type CellMetrics } from "../render/metrics";
@@ -105,8 +114,10 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
     });
   });
 
-  const pointForPointer = (
-    e: PointerEvent,
+  // 接受 MouseEvent(PointerEvent / WheelEvent 都继承自它)── wheel 路径
+  // 需要复用同一坐标换算。
+  const pointForEvent = (
+    e: MouseEvent,
     anchor?: SelectionPoint,
   ): SelectionPoint | null => {
     const metrics = cellMetrics();
@@ -125,6 +136,50 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
       },
       anchor,
     );
+  };
+
+  // 把 SelectionPoint 转换为 1-based 终端 cell 坐标。
+  // `clamp` 控制点击落在历史 / 越界时的行为:press 用严格模式(返回 null),
+  // drag / release 用 clamp(返回钳制到 active grid 边界的 cell)。
+  const cellForPoint = (
+    point: SelectionPoint,
+    clamp: boolean = false,
+  ): { row: number; col: number } | null =>
+    selectionPointToCell(
+      point,
+      {
+        historyLen: session.store.state.historyLen,
+        gridRows: session.store.state.size.rows,
+        cols: session.store.state.size.cols,
+        altScreen: session.store.state.modes.alt_screen,
+      },
+      { clampToActiveGrid: clamp },
+    );
+
+  const sendMouseCell = (
+    e: MouseEvent,
+    cell: { row: number; col: number },
+    kind: MouseKind,
+  ): boolean => {
+    const msg = buildMouseMessage({
+      kind,
+      col: cell.col,
+      row: cell.row,
+      mods: collectMouseMods(e),
+    });
+    if (!msg) return false;
+    session.send(msg);
+    return true;
+  };
+
+  const sendMouseAt = (
+    e: MouseEvent,
+    point: SelectionPoint,
+    kind: MouseKind,
+  ): boolean => {
+    const cell = cellForPoint(point);
+    if (!cell) return false;
+    return sendMouseCell(e, cell, kind);
   };
 
   const copySelection = (): void => {
@@ -201,28 +256,131 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
     };
     let selectingPointer: number | null = null;
     let selectionAnchor: SelectionPoint | null = null;
+    // TUI mouse reporting 的活跃指针。和 selectingPointer 互斥 ── 一次
+    // pointer down 要么发起前端选择,要么转给 TUI。release 时需要原 button
+    // 才能正确编码 SGR release。
+    let tuiPointer: number | null = null;
+    let tuiPointerButton: MouseButton | null = null;
+    // 最近一次成功转换的 cell。drag / release 用钳制模式后理论上总能算出
+    // cell;万一 metrics 失效拿不到,回退用上一次值,避免 release 丢失。
+    let tuiLastCell: { row: number; col: number } | null = null;
+    let wheelAccumPx = 0;
+
+    const mouseMode = (): typeof session.store.state.modes.mouse_reporting =>
+      session.store.state.modes.mouse_reporting;
+
     const onPointerDown = (e: PointerEvent): void => {
       props.onFocusRequest();
       el.focus();
+      const button = pointerButton(e.button);
+      if (button === null) return;
+      const point = pointForEvent(e);
+      if (!point) return;
+
+      const routing = decideMouseRouting({
+        mouseReporting: mouseMode(),
+        kind: "click",
+        shiftKey: e.shiftKey,
+      });
+
+      if (routing === "tui") {
+        const cell = cellForPoint(point);
+        if (cell && sendMouseCell(e, cell, { type: "press", button })) {
+          e.preventDefault();
+          tuiPointer = e.pointerId;
+          tuiPointerButton = button;
+          tuiLastCell = cell;
+          // setPointerCapture 保证后续 pointermove / pointerup 都派发到
+          // 本元素 ── 即便鼠标拖出 viewport / 跨窗口释放,release 也不会
+          // 漏发,TUI 不会卡在「键一直按着」。
+          el.setPointerCapture(e.pointerId);
+          return;
+        }
+        // 点击落在历史区:无 active grid cell,不上报、也不抢路径。让用户
+        // 仍可在历史里用 selection 复制。继续走 selection 分支。
+      }
+
+      // selection 路径只接受 primary button ── middle/right 不启动选择。
       if (e.button !== 0) return;
-      const anchor = pointForPointer(e);
-      if (!anchor) return;
       e.preventDefault();
       clearBrowserSelection();
+      // Shift+click 扩选:沿用现有 selection 的 anchor,head 移到新点击位置。
+      // 既有选择不存在时退化为普通新选择。
+      const existing = e.shiftKey ? selection() : null;
+      const anchor = existing ? existing.anchor : point;
       selectingPointer = e.pointerId;
       selectionAnchor = anchor;
-      setSelection({ anchor, head: anchor });
+      setSelection({ anchor, head: point });
       el.setPointerCapture(e.pointerId);
     };
+
     const onPointerMove = (e: PointerEvent): void => {
-      if (selectingPointer !== e.pointerId || !selectionAnchor) return;
-      const head = pointForPointer(e, selectionAnchor);
-      if (!head) return;
-      e.preventDefault();
-      clearBrowserSelection();
-      setSelection({ anchor: selectionAnchor, head });
+      // TUI drag:有 active TUI pointer,按 drag 报。clamp 模式 ── 拖出
+      // viewport 时把 cell 钳制到 active grid 边界,而不是丢事件。
+      if (tuiPointer === e.pointerId && tuiPointerButton !== null) {
+        const routing = decideMouseRouting({
+          mouseReporting: mouseMode(),
+          kind: "drag",
+          shiftKey: e.shiftKey,
+        });
+        if (routing !== "tui") return;
+        const point = pointForEvent(e);
+        if (!point) return;
+        const cell = cellForPoint(point, true);
+        if (!cell) return;
+        tuiLastCell = cell;
+        if (sendMouseCell(e, cell, { type: "drag", button: tuiPointerButton })) {
+          e.preventDefault();
+        }
+        return;
+      }
+
+      // 既有前端选择拖拽:已在 selection 路径里,不被 mouse mode 影响。
+      if (selectingPointer === e.pointerId && selectionAnchor) {
+        const head = pointForEvent(e, selectionAnchor);
+        if (!head) return;
+        e.preventDefault();
+        clearBrowserSelection();
+        setSelection({ anchor: selectionAnchor, head });
+        return;
+      }
+
+      // 无按键 hover ── 仅 mouse_reporting === "any" 才上报 motion。
+      if (e.buttons === 0) {
+        const routing = decideMouseRouting({
+          mouseReporting: mouseMode(),
+          kind: "motion",
+          shiftKey: e.shiftKey,
+        });
+        if (routing !== "tui") return;
+        const point = pointForEvent(e);
+        if (!point) return;
+        sendMouseAt(e, point, { type: "motion" });
+      }
     };
+
     const finishPointerSelection = (e: PointerEvent): void => {
+      if (tuiPointer === e.pointerId) {
+        const button = tuiPointerButton;
+        const lastCell = tuiLastCell;
+        tuiPointer = null;
+        tuiPointerButton = null;
+        tuiLastCell = null;
+        if (el.hasPointerCapture(e.pointerId)) {
+          el.releasePointerCapture(e.pointerId);
+        }
+        if (button === null) return;
+        // release 必须发出去,否则 TUI 卡在「键一直按着」状态。优先用当前
+        // pointer 钳制后的 cell,拿不到再回退用 last valid cell。
+        const point = pointForEvent(e);
+        const cell =
+          (point ? cellForPoint(point, true) : null) ?? lastCell;
+        if (!cell) return;
+        if (sendMouseCell(e, cell, { type: "release", button })) {
+          e.preventDefault();
+        }
+        return;
+      }
       if (selectingPointer !== e.pointerId) return;
       e.preventDefault();
       clearBrowserSelection();
@@ -234,6 +392,61 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
       const current = selection();
       if (!current || isCollapsedSelection(current)) setSelection(null);
     };
+
+    const onWheel = (e: WheelEvent): void => {
+      const routing = decideMouseRouting({
+        mouseReporting: mouseMode(),
+        kind: "click",
+        shiftKey: e.shiftKey,
+      });
+      // selection 路径 = 让浏览器走 scrollback,不 preventDefault。
+      if (routing !== "tui") return;
+      const metrics = cellMetrics();
+      if (!metrics) return;
+      const point = pointForEvent(e);
+      if (!point) return;
+      const cell = cellForPoint(point);
+      if (!cell) return;
+
+      const { steps, remainder } = wheelLineSteps({
+        accumulator: wheelAccumPx,
+        deltaY: e.deltaY,
+        deltaMode: e.deltaMode,
+        cellHeight: metrics.cellH,
+      });
+      wheelAccumPx = remainder;
+      if (steps === 0) {
+        // 像素增量累积中,先抑制原生滚动 ── 否则用户感知到 scrollback 抖一下
+        // 但 TUI 没反应。
+        e.preventDefault();
+        return;
+      }
+      e.preventDefault();
+      const kindType: "wheel_down" | "wheel_up" =
+        steps > 0 ? "wheel_down" : "wheel_up";
+      const mods = collectMouseMods(e);
+      const msg = buildMouseMessage({
+        kind: { type: kindType },
+        col: cell.col,
+        row: cell.row,
+        mods,
+      });
+      if (!msg) return;
+      const count = Math.min(Math.abs(steps), 10);
+      for (let i = 0; i < count; i++) session.send(msg);
+    };
+    // 抑制浏览器 / WebView 在 mouse reporting 开启时弹 context menu /
+    // 触发中键自动滚动等默认行为 ── 否则右键和中键的 TUI 交互(tmux 弹
+    // pane menu / vim visual mode 等)会被浏览器抢走。Shift 按下时让用户
+    // 显式拿回浏览器默认。
+    const suppressBrowserDefaultForTui = (e: MouseEvent): void => {
+      if (mouseMode() === "off") return;
+      if (e.shiftKey) return;
+      e.preventDefault();
+    };
+    const onContextMenu = (e: MouseEvent): void => suppressBrowserDefaultForTui(e);
+    const onAuxClick = (e: MouseEvent): void => suppressBrowserDefaultForTui(e);
+
     let scrollSyncRaf: number | undefined;
     const onScroll = (): void => {
       // 离底 < 4px 视作「贴底」── 贴底才自动滚,用户上滚后暂停。
@@ -255,6 +468,10 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
     el.addEventListener("pointermove", onPointerMove);
     el.addEventListener("pointerup", finishPointerSelection);
     el.addEventListener("pointercancel", finishPointerSelection);
+    // wheel 必须 non-passive 才能 preventDefault 抢回 TUI 滚动。
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("contextmenu", onContextMenu);
+    el.addEventListener("auxclick", onAuxClick);
     el.addEventListener("scroll", onScroll);
 
     onCleanup(() => {
@@ -268,6 +485,9 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
       el.removeEventListener("pointermove", onPointerMove);
       el.removeEventListener("pointerup", finishPointerSelection);
       el.removeEventListener("pointercancel", finishPointerSelection);
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("contextmenu", onContextMenu);
+      el.removeEventListener("auxclick", onAuxClick);
       el.removeEventListener("scroll", onScroll);
       // 卸载时仍持有焦点就显式补发 focus lost,否则后台 PTY 一直以为自己 focused。
       if (hasDomFocus) session.send({ type: "focus", gained: false });

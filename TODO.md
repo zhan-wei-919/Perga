@@ -6,31 +6,6 @@
 
 ---
 
-## 前端鼠标上报未接入
-
-**现状**:后端 mouse 输入链路已存在:`crates/perga-server/src/wire.rs` 能解析
-`ClientMessage::Mouse`,`crates/terminal-session/src/event_loop.rs` 会调用
-`terminal-input::encode_mouse`,前端 `web/src/state/wire.ts` 也有 mouse wire
-类型。但 `web/src/ui/pane_leaf.tsx` 还没有 pointer / wheel listener 把浏览器
-鼠标事件换算成终端 `(row,col)` 后发送 `{ type:"mouse", ... }`。
-
-**已知偏差**:
-
-- `vim` / `less` / `tmux` / `htop` / `lazygit` 等 TUI 即使开启 mouse reporting,
-  也收不到前端鼠标点击、拖拽、滚轮。
-- 终端选择复制先做时可以默认接管拖拽;但后续接入 mouse reporting 后,必须在
-  `session.store.state.modes.mouse_reporting !== "off"` 时默认把鼠标交给 TUI,
-  并保留 `Shift/Alt+Drag` 这类强制前端选择的修饰键路径。
-
-**触发条件**:用户需要 TUI 鼠标操作,或终端选择复制实现到需要最终确定
-selection vs TUI mouse 的事件优先级时。
-
-**涉及**:`web/src/ui/pane_leaf.tsx`,`web/src/state/wire.ts`,
-`crates/perga-server/src/wire.rs`,`crates/terminal-session/src/event_loop.rs`,
-`crates/terminal-input/src/encoder.rs`。
-
----
-
 ## autotest:输入回显阶段仍用静默窗口
 
 **现状**:`web/src/util/autotest.ts` 的**命令执行阶段**用 `command_end` 协议
