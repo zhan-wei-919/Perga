@@ -1,0 +1,45 @@
+[package]
+name = "perga-tauri"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+description = "Perga 桌面 / 移动端 Tauri 应用入口"
+
+[[bin]]
+name = "perga"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri 2 ── webview + IPC 桥 + 跨平台 bundle。
+tauri = { version = "2", features = [] }
+
+# Perga 协议无关核心(profile CRUD + ClientMessage + session 工厂)。
+perga-core = { path = "../perga-core" }
+
+# 直接拿这几个类型:command 签名 / 事件 emit 都要。
+transport = { path = "../transport" }
+terminal-protocol = { path = "../terminal-protocol" }
+terminal-session = { path = "../terminal-session" }
+
+# Session 注册表;crossbeam Sender/Receiver clone 进 emit 线程。
+crossbeam-channel.workspace = true
+
+# Tauri 2 内嵌 tokio runtime;我们用 spawn_blocking 把 PTY/SSH open 隔离到独立线程。
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+
+# 每个 session 一个 uuid。
+uuid = { version = "1", features = ["v4"] }
+
+# 序列化(command 参数 / 返回值)。
+serde.workspace = true
+serde_json.workspace = true
+
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

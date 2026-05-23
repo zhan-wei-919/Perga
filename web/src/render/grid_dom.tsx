@@ -35,12 +35,18 @@ export type GridDomSize = {
 };
 
 export type GridRowSegment = {
+  xCell: number;
   text: string;
   fg: Color;
   bg: Color;
   attrs: CellAttr[];
   widthCells: number;
 };
+
+export type GridRowDebugSegment = Pick<
+  GridRowSegment,
+  "xCell" | "widthCells" | "text"
+>;
 
 export type CursorOverlayModel = {
   x: number;
@@ -284,11 +290,38 @@ export function segmentsForGridRow(
     }
 
     if (cell.width === "wide") {
-      out.push(segmentFromCell(cell));
+      const xCell = i;
+      const fg = cell.fg;
+      const bg = cell.bg;
+      const attrs = cell.attrs;
+      let text = glyphForCell(cell);
+      let widthCells = 2;
+      i++;
+
+      while (i < end) {
+        const spacer = cellAt(cells, i);
+        const next = cellAt(cells, i + 1);
+        if (spacer.width !== "wide_spacer") break;
+        if (next.width !== "wide") break;
+        if (!sameColor(fg, next.fg)) break;
+        if (!sameColor(bg, next.bg)) break;
+        if (!sameAttrs(attrs, next.attrs)) break;
+        text += glyphForCell(next);
+        widthCells += 2;
+        i += 2;
+      }
+
+      if (cellAt(cells, i).width === "wide_spacer") i++;
+      out.push({ xCell, text, fg, bg, attrs, widthCells });
+      continue;
+    }
+
+    if (isSkippableBlank(cell)) {
       i++;
       continue;
     }
 
+    const xCell = i;
     const fg = cell.fg;
     const bg = cell.bg;
     const attrs = cell.attrs;
@@ -299,6 +332,7 @@ export function segmentsForGridRow(
     while (i < end) {
       const next = cellAt(cells, i);
       if (next.width !== "single") break;
+      if (isSkippableBlank(next)) break;
       if (!sameColor(fg, next.fg)) break;
       if (!sameColor(bg, next.bg)) break;
       if (!sameAttrs(attrs, next.attrs)) break;
@@ -307,16 +341,27 @@ export function segmentsForGridRow(
       i++;
     }
 
-    out.push({ text, fg, bg, attrs, widthCells });
+    out.push({ xCell, text, fg, bg, attrs, widthCells });
   }
   return out;
+}
+
+export function debugGridRowSegments(
+  cells: Cell[],
+  cols: number,
+): GridRowDebugSegment[] {
+  return segmentsForGridRow(cells, cols).map(({ xCell, widthCells, text }) => ({
+    xCell,
+    widthCells,
+    text,
+  }));
 }
 
 export function gridSegmentSignature(segments: GridRowSegment[]): string {
   return segments
     .map(
       (seg) =>
-        `${seg.widthCells}:${colorKey(seg.fg)}:${colorKey(seg.bg)}:${attrsKey(
+        `${seg.xCell}:${seg.widthCells}:${colorKey(seg.fg)}:${colorKey(seg.bg)}:${attrsKey(
           seg.attrs,
         )}:${seg.text}`,
     )
@@ -378,6 +423,9 @@ function segmentElement(seg: GridRowSegment, metrics: CellMetrics): HTMLSpanElem
   const span = document.createElement("span");
   span.textContent = seg.text;
   Object.assign(span.style, {
+    position: "absolute",
+    left: `${seg.xCell * metrics.cellW}px`,
+    top: "0",
     display: "inline-block",
     width: `${seg.widthCells * metrics.cellW}px`,
     height: `${metrics.cellH}px`,
@@ -387,6 +435,10 @@ function segmentElement(seg: GridRowSegment, metrics: CellMetrics): HTMLSpanElem
     whiteSpace: "pre",
   });
   const css = segmentStyle(seg);
+  // CSS bold can pick a different font face with a different advance in WebKitGTK.
+  // The active grid is positioned by terminal cells, so color may change but glyph
+  // weight must not change layout.
+  delete css["font-weight"];
   if (seg.attrs.includes("hidden")) {
     delete css.visibility;
     css.color = "transparent";
@@ -403,20 +455,10 @@ function visibleEnd(
 ): number {
   let end = cols;
   while (end > 0) {
-    if (!isDefaultBlank(cellAt(cells, end - 1))) break;
+    if (!isSkippableBlank(cellAt(cells, end - 1))) break;
     end--;
   }
   return end;
-}
-
-function segmentFromCell(cell: Cell): GridRowSegment {
-  return {
-    text: glyphForCell(cell),
-    fg: cell.fg,
-    bg: cell.bg,
-    attrs: cell.attrs,
-    widthCells: cell.width === "wide" ? 2 : 1,
-  };
 }
 
 function glyphForCell(cell: Cell): string {
@@ -438,17 +480,6 @@ function makeBlank(): Cell {
   };
 }
 
-function isDefaultBlank(c: Cell): boolean {
-  return (
-    c.ch === " " &&
-    c.combining.length === 0 &&
-    c.width === "single" &&
-    c.attrs.length === 0 &&
-    sameColor(c.fg, DEFAULT_FG) &&
-    sameColor(c.bg, DEFAULT_BG)
-  );
-}
-
 function cursorSnapshot(cursor: Cursor): Cursor {
   return {
     row: cursor.row,
@@ -464,6 +495,18 @@ function cursorChanged(a: Cursor, b: Cursor): boolean {
     a.col !== b.col ||
     a.visible !== b.visible ||
     a.style !== b.style
+  );
+}
+
+function isSkippableBlank(c: Cell): boolean {
+  return (
+    c.ch === " " &&
+    c.combining.length === 0 &&
+    c.width === "single" &&
+    sameColor(c.bg, DEFAULT_BG) &&
+    !c.attrs.includes("reverse") &&
+    !c.attrs.includes("underline") &&
+    !c.attrs.includes("strikethrough")
   );
 }
 
@@ -515,6 +558,7 @@ function rootStyle(size: GridDomSize, metrics: CellMetrics): Record<string, stri
 
 function rowStyle(width: number, metrics: CellMetrics): Record<string, string> {
   return {
+    position: "relative",
     width: `${width}px`,
     height: `${metrics.cellH}px`,
     lineHeight: `${metrics.cellH}px`,

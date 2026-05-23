@@ -28,6 +28,7 @@ import {
 } from "../state/profiles";
 import { ZOOM_MAX, ZOOM_MIN, ZOOM_STEP } from "../state/settings";
 import { useSettings } from "../state/settings_context";
+import { HostForm, emptyProfile, profileToBody } from "./host_form";
 
 const THEME_LABELS: Record<ThemeId, string> = {
   dark: "深色",
@@ -311,152 +312,8 @@ const HostRow: Component<{
   </div>
 );
 
-const HostForm: Component<{
-  initial: HostProfileBody;
-  onSubmit: (body: HostProfileBody) => void;
-  onCancel: () => void;
-}> = (props) => {
-  // 表单本地状态:每字段一个 signal,简单直接。
-  const initial = props.initial;
-  const [name, setName] = createSignal(initial.name);
-  const [user, setUser] = createSignal(initial.user);
-  const [host, setHost] = createSignal(initial.host);
-  const [port, setPort] = createSignal(initial.port);
-  const initialPassword =
-    initial.auth.type === "password" ? initial.auth.password : "";
-  const [password, setPassword] = createSignal(initialPassword);
-
-  // 编辑模式下 id 不可改;新建模式自动生成(用 name 派生 + 时间戳 fallback)。
-  const isNew = initial.id === "";
-
-  const submit = (e: SubmitEvent): void => {
-    e.preventDefault();
-    const trimmedPwd = password();
-    const auth: HostProfileBody["auth"] =
-      trimmedPwd.length > 0
-        ? { type: "password", password: trimmedPwd }
-        : { type: "agent" };
-    const id = isNew ? slugify(name()) || `host-${Date.now()}` : initial.id;
-    props.onSubmit({
-      id,
-      name: name(),
-      user: user(),
-      host: host(),
-      port: port(),
-      auth,
-    });
-  };
-
-  return (
-    <form style={formStyle} onSubmit={submit}>
-      <FormField label="名称">
-        <input
-          type="text"
-          required
-          autofocus
-          value={name()}
-          onInput={(e) => setName(e.currentTarget.value)}
-          style={inputStyle}
-          placeholder="给这台机器起个名"
-        />
-      </FormField>
-      <FormField label="用户名">
-        <input
-          type="text"
-          required
-          value={user()}
-          onInput={(e) => setUser(e.currentTarget.value)}
-          style={inputStyle}
-          placeholder="root / ubuntu / ..."
-        />
-      </FormField>
-      <FormField label="主机 / IP">
-        <input
-          type="text"
-          required
-          value={host()}
-          onInput={(e) => setHost(e.currentTarget.value)}
-          style={inputStyle}
-          placeholder="example.com 或 192.168.1.10"
-        />
-      </FormField>
-      <FormField label="端口">
-        <input
-          type="number"
-          required
-          min={1}
-          max={65535}
-          value={port()}
-          onInput={(e) => setPort(Number(e.currentTarget.value) || 22)}
-          style={{ ...inputStyle, width: "100px" }}
-        />
-      </FormField>
-      <FormField label="密码">
-        <input
-          type="password"
-          value={password()}
-          onInput={(e) => setPassword(e.currentTarget.value)}
-          style={inputStyle}
-          placeholder="留空使用 ssh-agent(桌面)"
-        />
-      </FormField>
-      <div style={formHintStyle}>
-        密码存于本机 Perga 数据目录,文件权限 0600(仅当前用户可读)。
-      </div>
-      <div style={formActionsStyle}>
-        <button type="button" style={secondaryButtonStyle} onClick={props.onCancel}>
-          取消
-        </button>
-        <button type="submit" style={primaryButtonStyle}>
-          保存
-        </button>
-      </div>
-    </form>
-  );
-};
-
-const FormField: Component<{
-  label: string;
-  children: import("solid-js").JSX.Element;
-}> = (props) => (
-  <label style={formFieldStyle}>
-    <span style={formLabelStyle}>{props.label}</span>
-    {props.children}
-  </label>
-);
-
-/// 拿 name 派生一个合法 id(小写英数 + 连字符)。空 / 全字符不可用时调用方
-/// fallback 到 `host-<timestamp>`。
-function slugify(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function emptyProfile(): HostProfileBody {
-  return {
-    id: "",
-    name: "",
-    user: "",
-    host: "",
-    port: 22,
-    auth: { type: "agent" },
-  };
-}
-
-function profileToBody(p: HostProfileSummary): HostProfileBody {
-  // GET 路径不返密码,编辑表单只能拿到 summary;**密码字段空白进 form**,
-  // 用户不填就保持 agent / 或重新输入密码生效。
-  return {
-    id: p.id,
-    name: p.name,
-    user: p.user,
-    host: p.host,
-    port: p.port,
-    auth: { type: "agent" },
-  };
-}
+// HostForm / FormField / slugify / emptyProfile / profileToBody 抽到了
+// `host_form.tsx`,以便 profile_picker.tsx 复用同一个表单。
 
 // ─────────────────── styles ───────────────────
 
@@ -539,62 +396,9 @@ const hostMetaStyle: Record<string, string> = {
   "margin-top": "2px",
 };
 
-const formStyle: Record<string, string> = {
-  display: "flex",
-  "flex-direction": "column",
-  gap: "10px",
-  padding: "12px",
-  "border-radius": "6px",
-  border: "1px solid var(--pg-accent)",
-  background: "var(--pg-overlay-hover)",
-  "margin-bottom": "8px",
-};
-
-const formFieldStyle: Record<string, string> = {
-  display: "flex",
-  "flex-direction": "column",
-  gap: "4px",
-};
-
-const formLabelStyle: Record<string, string> = {
-  "font-size": "11px",
-  color: "var(--pg-fg-dim)",
-  "text-transform": "uppercase",
-  "letter-spacing": "0.04em",
-};
-
-const inputStyle: Record<string, string> = {
-  padding: "6px 8px",
-  "font-family": "ui-monospace, monospace",
-  "font-size": "13px",
-  "border-radius": "4px",
-  border: "1px solid var(--pg-overlay-border)",
-  background: "var(--term-background)",
-  color: "var(--term-foreground)",
-};
-
-const formHintStyle: Record<string, string> = {
-  ...hintStyle,
-  "margin-top": "0",
-};
-
-const formActionsStyle: Record<string, string> = {
-  display: "flex",
-  "justify-content": "flex-end",
-  gap: "8px",
-  "margin-top": "4px",
-};
-
-const primaryButtonStyle: Record<string, string> = {
-  padding: "6px 14px",
-  "font-family": "ui-monospace, monospace",
-  "font-size": "12px",
-  cursor: "pointer",
-  "border-radius": "4px",
-  border: "1px solid var(--pg-accent)",
-  background: "var(--pg-accent)",
-  color: "var(--term-background)",
-};
+// formStyle / formFieldStyle / formLabelStyle / inputStyle / formHintStyle /
+// formActionsStyle / primaryButtonStyle 一并搬到 `host_form.tsx`,这里只保留
+// 设置面板自己用到的 chrome 样式(host row / 按钮等)。
 
 const secondaryButtonStyle: Record<string, string> = {
   padding: "6px 12px",

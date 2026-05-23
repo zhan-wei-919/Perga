@@ -8,12 +8,16 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "tauri:dev": "cd ../crates/perga-tauri && cargo tauri dev",
+    "tauri:build": "cd ../crates/perga-tauri && cargo tauri build"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2",
     "solid-js": "^1.9.3"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2",
     "jsdom": "^29.1.1",
     "typescript": "^5.6.3",
     "vite": "^5.4.10",

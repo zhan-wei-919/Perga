@@ -1,9 +1,9 @@
-// WebSocket client for a single perga-server session.
+// WebSocket session transport(dev 浏览器形态)。Tauri 打包形态走 `./tauri.ts`,
+// 工厂在 `./index.ts` 二选一。
 //
 // **Phase 1 显式不做 auto-reconnect**:重连意味着要拿一个 fresh `init` 来对齐
 // 本地 grid,但服务端没存 session state(WS 一断 PTY 就死)── 重连等价于
 // 「开新会话」,UX 上得明确告诉用户,不能偷偷重连让人以为还连着原来的。
-// 真要做要在 Phase 4 一起做。
 //
 // **Send 队列**:WS readyState 不到 OPEN 时把消息暂存,onopen 后 flush。
 // 关闭后 send 直接 drop ── 配合 reactive store 的 `exited` 标记,UI 不该再
@@ -11,27 +11,15 @@
 
 import type { ProtocolEvent } from "../state/protocol";
 import type { ClientMessage } from "../state/wire";
-import type { PerfTracker } from "../util/perf";
+import type { Transport, TransportFactory, TransportOpts } from "./transport";
 
-export type SessionSocketOpts = {
-  /** 1..=1000 */
-  rows: number;
-  /** 1..=1000 */
-  cols: number;
-  /** 可选 host profile id;有值时走 SSH backend(`?profile=<id>`),否则本地 shell。 */
-  profileId?: string;
-  /** server 端事件回调。已经反序列化好。 */
-  onEvent: (ev: ProtocolEvent) => void;
-  /** WS 关闭(server 主动或网络断)时调用。`code` / `reason` 来自 CloseEvent。 */
-  onClose: (info: { code: number; reason: string }) => void;
-  /** 反序列化失败 / 其他客户端侧错误。不会停 socket(继续等下一条)。 */
-  onError?: (msg: string) => void;
-  /** 可选 perf 采样器。`?perf=1` 时由 App 注入,默认 undefined 零开销。 */
-  perfTracker?: PerfTracker;
+export type SessionSocketOpts = TransportOpts & {
   /** 用于测试覆盖 `new WebSocket(url)` ── 生产代码不传。 */
   factory?: (url: string) => WebSocket;
 };
 
+/// WebSocket 客户端核心。`SessionSocket` 类保留独立形态供测试构造,
+/// 工厂 [`createWsTransport`] 在它之上包成 `Transport` 接口对外暴露。
 export class SessionSocket {
   private ws: WebSocket | null = null;
   private queue: ClientMessage[] = [];
@@ -112,11 +100,21 @@ export class SessionSocket {
   }
 }
 
+/// `WsTransport` 工厂 —— 把 `SessionSocket` 包成统一 Transport 接口。
+/// 同步返回 handle,内部已经 `connect()`(WS 自身就是异步开 socket)。
+export const createWsTransport: TransportFactory = (opts: TransportOpts): Transport => {
+  const socket = new SessionSocket(opts);
+  socket.connect();
+  return {
+    send: (msg) => socket.send(msg),
+    close: () => socket.close(),
+  };
+};
+
 /// `/ws?rows=&cols=[&profile=<id>]` ── 同源相对路径,dev 模式由 vite proxy
-/// 转发到 7777 端口,Tauri 模式下两端同进程后这层 URL 还会改成 IPC,API 一致。
+/// 转发到 7777 端口。Tauri 模式走 [`./tauri.ts`] 不走本路径。
 ///
-/// `profileId` 缺省 = 本地 shell;指定 = server 走 SSH backend(由 perga-server
-/// 的 profile store 翻译成 SshConfig)。
+/// `profileId` 缺省 = 本地 shell;指定 = server 走 SSH backend。
 function buildUrl(rows: number, cols: number, profileId?: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   const base = `${proto}//${window.location.host}/ws?rows=${rows}&cols=${cols}`;

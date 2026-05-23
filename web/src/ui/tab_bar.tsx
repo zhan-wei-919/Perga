@@ -16,10 +16,17 @@ export type TabBarProps = {
   onOpenSettings: () => void;
   /** 是否可见(由 App 算:多 tab 或鼠标 hover)。 */
   visible: boolean;
+  /// 平台层覆盖 + 行为:移动端 App 传入「打开 profile picker」。缺省 = 桌面行为
+  /// (直接 `ws.newTab()` 开本地 shell)。
+  onPlusOverride?: () => void;
 };
 
 export const TabBar: Component<TabBarProps> = (props) => {
   const ws = props.workspace;
+  const handlePlus = (): void => {
+    if (props.onPlusOverride) props.onPlusOverride();
+    else ws.newTab();
+  };
   return (
     <div style={barStyle(props.visible)}>
       <For each={ws.state.tabs}>
@@ -42,7 +49,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
           </div>
         )}
       </For>
-      <div style={newTabStyle} onClick={() => ws.newTab()} title="新建 tab">
+      <div style={newTabStyle} onClick={handlePlus} title="新建 tab">
         +
       </div>
       {/* 弹性空隙把齿轮顶到最右。 */}

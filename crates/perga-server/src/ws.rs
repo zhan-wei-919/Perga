@@ -42,16 +42,15 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use futures_util::stream::StreamExt;
 use futures_util::SinkExt;
-use pty::{inject_shell_integration, PtyConfig};
+use perga_core::profiles::{find_profile, load_profiles};
+use perga_core::session_factory::{open_local, open_ssh};
+use perga_core::wire::ClientMessage;
 use serde::Deserialize;
-use ssh::SshSession;
 use terminal_protocol::ProtocolEncoder;
 use terminal_session::TerminalSession;
 use transport::TerminalSize;
 
 use crate::bridge::spawn_event_bridge;
-use crate::profiles::{find_profile, load_profiles, to_ssh_config, HostProfile};
-use crate::wire::ClientMessage;
 
 /// query 参数。`rows` / `cols` 严格 > 0;上限 1000 是 sanity ── 没人开
 /// 65535 列,允许过大的值反而会让 alacritty 内部分配巨型 grid。
@@ -128,10 +127,8 @@ async fn send_session_error_and_close(mut socket: WebSocket, reason: String) {
 /// 错误以 `String` 返回,由 `handle_upgraded` 翻成 SessionError。
 async fn spawn_local_blocking(size: TerminalSize) -> Result<TerminalSession, String> {
     tokio::task::spawn_blocking(move || -> Result<TerminalSession, String> {
-        let mut cfg = PtyConfig::with_default_shell(size);
-        cfg.cwd = env::current_dir().ok();
-        inject_shell_integration(&mut cfg);
-        TerminalSession::spawn_local(cfg).map_err(|e| format!("{e}"))
+        let cwd = env::current_dir().ok();
+        open_local(size, cwd).map_err(|e| format!("{e}"))
     })
     .await
     .map_err(|e| format!("spawn task panicked: {e}"))?
@@ -150,23 +147,12 @@ async fn spawn_ssh_blocking(id: &str, size: TerminalSize) -> Result<TerminalSess
     })?;
 
     tokio::task::spawn_blocking(move || -> Result<TerminalSession, String> {
-        spawn_ssh_terminal_session(profile, size).map_err(|e| format!("{e}"))
+        // known_hosts_path = None 让 ssh crate 走 `~/.ssh/known_hosts`(桌面默认);
+        // Tauri 打包形态在 perga-tauri 那边走 `app_data_dir().join("known_hosts")`。
+        open_ssh(&profile, size, None).map_err(|e| format!("{e}"))
     })
     .await
     .map_err(|e| format!("spawn task panicked: {e}"))?
-}
-
-/// SSH backend 构造的同步路径,被 `spawn_ssh_blocking` 在 blocking 线程上调。
-fn spawn_ssh_terminal_session(
-    profile: HostProfile,
-    size: TerminalSize,
-) -> Result<TerminalSession, ssh::SshError> {
-    let ssh_cfg = to_ssh_config(&profile);
-    let ssh = SshSession::spawn(ssh_cfg, size)?;
-    // TerminalSession::spawn_with_transport 失败只剩 thread spawn 失败这一种;
-    // 把它折成 SshError::Io 便于上层统一处理。
-    TerminalSession::spawn_with_transport(Box::new(ssh), size)
-        .map_err(|e| ssh::SshError::Io(format!("wrap ssh into terminal-session: {e}")))
 }
 
 /// 升级后的实际双工循环。任一方向结束都拆掉整条会话。

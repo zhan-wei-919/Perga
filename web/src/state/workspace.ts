@@ -12,7 +12,7 @@
 
 import { createStore, produce } from "solid-js/store";
 
-import { SessionSocket } from "../net/ws";
+import { type Transport, transportFactory } from "../net";
 import type { AutoBench } from "../util/autotest";
 import type { PerfTracker } from "../util/perf";
 import {
@@ -116,7 +116,7 @@ export function createWorkspace(
     profileId: string | undefined,
   ): LeafSession => {
     const store = createSessionStore(FALLBACK_SIZE);
-    let socket: SessionSocket | null = null;
+    let transport: Transport | null = null;
 
     // 此 leaf 是否是 active tab 的 focused leaf ── 决定是否把事件喂给 autotest。
     const isFocused = (): boolean => {
@@ -147,28 +147,28 @@ export function createWorkspace(
       store,
       profileId,
       connect(rows, cols) {
-        if (socket) return; // 幂等
-        socket = new SessionSocket({
+        if (transport) return; // 幂等
+        transport = transportFactory({
           rows,
           cols,
           profileId,
           onEvent,
           onClose: ({ code, reason }) => {
             console.warn(
-              `perga.ws.closed leaf=${id} code=${code} reason=${reason}`,
+              `perga.transport.closed leaf=${id} code=${code} reason=${reason}`,
             );
           },
-          onError: (msg) => console.warn(`perga.ws.error leaf=${id} ${msg}`),
+          onError: (msg) =>
+            console.warn(`perga.transport.error leaf=${id} ${msg}`),
           perfTracker: perfTracker?.isEnabled() ? perfTracker : undefined,
         });
-        socket.connect();
       },
       send(msg) {
-        socket?.send(msg);
+        transport?.send(msg);
       },
       dispose() {
-        socket?.close();
-        socket = null;
+        transport?.close();
+        transport = null;
       },
       // render 的 scheduled / frame / cancelled 三者必须成对计数,**不能**按
       // isFocused 过滤 ── 焦点会在 schedule 与 resolve 之间变化(切 tab),

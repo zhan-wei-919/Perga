@@ -1,6 +1,7 @@
-//! WebSocket 入站消息(client → server)的 wire 类型。
+//! Client → backend 输入消息的 wire 类型。
 //!
-//! 协议形状(`tag = "type"`,snake_case):
+//! WebSocket / Tauri invoke 都直接消费同一份 schema。协议形状(`tag = "type"`,
+//! snake_case):
 //!
 //! ```jsonc
 //! { "type": "key",    "key": { "type": "char", "value": "a" }, "mods": {...} }
@@ -12,7 +13,7 @@
 //!
 //! Key / Mouse 复用 `terminal_input` 已经 derive 好的 `Deserialize` ── 那
 //! 一层就是边界类型(`FunctionKey` 1..=12,`MouseEvent::col/row` `NonZeroU16`),
-//! 非法值在反序列化阶段直接拒绝,server 内部不再补特殊分支。
+//! 非法值在反序列化阶段直接拒绝,backend 内部不再补特殊分支。
 
 use serde::Deserialize;
 use terminal_engine::TerminalSize;
@@ -96,7 +97,7 @@ mod tests {
     }
 
     /// FunctionKey 边界拒绝:F13 在 terminal-input 那一层被拦,这里不再重复。
-    /// 仅断言 server wire 不会把它解出来。
+    /// 仅断言 wire 不会把它解出来。
     #[test]
     fn rejects_invalid_function_key() {
         let raw = r#"{"type":"key","key":{"type":"f","n":13}}"#;

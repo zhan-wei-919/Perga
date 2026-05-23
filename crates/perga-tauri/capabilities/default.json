@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the Perga main window — 仅放行 Perga 自带的 custom command 与必需的核心权限。",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

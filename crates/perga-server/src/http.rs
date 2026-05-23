@@ -1,10 +1,10 @@
 //! REST 端点:`/api/hosts` + `/api/hosts/:id` 的增删改查。
 //!
 //! 前端 CRUD UI 通过这些端点操作 `~/.perga/hosts.toml`(写文件 + chmod 0600
-//! 由 [`crate::profiles`] 负责),用户不直接接触文件系统。
+//! 由 `perga_core::profiles` 负责),用户不直接接触文件系统。
 //!
 //! 错误分类:
-//! - 404:profile id 不存在(`GET /:id` / `PUT /:id` / `DELETE /:id`)。
+//! - 404:profile id 不存在(`PUT /:id` / `DELETE /:id`)。
 //! - 409:create 时 id 已存在(`POST /api/hosts`)。
 //! - 422:字段校验失败(空 user / host / 0 端口 / password 为空但 auth=password)。
 //! - 500:IO / toml 解析等运行时错误,带可读 message。
@@ -13,7 +13,7 @@ use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::Json;
 
-use crate::profiles::{
+use perga_core::profiles::{
     create_profile, delete_profile, load_profiles, update_profile, HostProfile, HostProfileSummary,
     ProfileError,
 };

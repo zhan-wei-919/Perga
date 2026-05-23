@@ -11,6 +11,7 @@ import {
   type Component,
   Show,
   createEffect,
+  createResource,
   createSignal,
   onCleanup,
   onMount,
@@ -29,11 +30,13 @@ import { createSettings } from "../state/settings";
 import { SettingsContext } from "../state/settings_context";
 import { createWorkspace } from "../state/workspace";
 import { AutoBench } from "../util/autotest";
+import { detectPlatform } from "../util/platform";
 import { PerfTracker, shouldEnablePerf } from "../util/perf";
 import { AutoTestButton } from "./autotest_button";
 import { Modal } from "./modal";
 import { PaneTreeView } from "./pane_tree_view";
 import { PerfOverlay } from "./perf_overlay";
+import { ProfilePicker } from "./profile_picker";
 import { SettingsPanel } from "./settings_panel";
 import { TabBar } from "./tab_bar";
 
@@ -79,6 +82,27 @@ export const App: Component = () => {
   };
 
   const [settingsOpen, setSettingsOpen] = createSignal(false);
+  // Profile picker(平板 + 移动 + 第一次启动引导)。`forceSetup` 由 picker 内部
+  // 在 0 profile 时切换;App 这里只控制开关。
+  const [pickerOpen, setPickerOpen] = createSignal(false);
+
+  // 平台探测一次:URL flag → Tauri command → 默认 desktop。createResource 让
+  // 我们在 SolidJS 响应式系统里使用 async 探测结果。
+  const [platform] = createResource(detectPlatform);
+  const isMobile = (): boolean => platform()?.kind === "mobile";
+
+  // 首次启动:移动端 → 自动弹 picker(picker 内部根据 0 profile 自动进入
+  // HostForm 引导)。createEffect 跟着 platform 解析触发,只点燃一次:第二次
+  // 触发时 pickerOpen 已是 true,人为关掉后 effect 也不再重开。
+  let firstRunHandled = false;
+  createEffect(() => {
+    if (firstRunHandled) return;
+    if (!platform()) return; // resource 还没解析
+    if (isMobile()) {
+      setPickerOpen(true);
+    }
+    firstRunHandled = true;
+  });
 
   // tab 栏自动隐藏:顶部 8px 是触发区,hover 后展开成 30px 的 tab 区;
   // 鼠标离开这整个 hover 区就立即收起。不要按 tab 数量常显,否则多 tab
@@ -122,6 +146,9 @@ export const App: Component = () => {
             workspace={workspace}
             onOpenSettings={() => setSettingsOpen(true)}
             visible={tabBarVisible()}
+            onPlusOverride={
+              isMobile() ? () => setPickerOpen(true) : undefined
+            }
           />
         </div>
         <div style={paneAreaStyle}>
@@ -143,6 +170,18 @@ export const App: Component = () => {
                 workspace.newTabWithProfile(profileId);
                 setSettingsOpen(false);
               }}
+            />
+          </Modal>
+        </Show>
+        <Show when={pickerOpen()}>
+          <Modal onClose={() => setPickerOpen(false)}>
+            <ProfilePicker
+              forceSetup={isMobile()}
+              onConnect={(profileId) => {
+                workspace.newTabWithProfile(profileId);
+                setPickerOpen(false);
+              }}
+              onCancel={() => setPickerOpen(false)}
             />
           </Modal>
         </Show>

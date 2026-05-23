@@ -1,0 +1,33 @@
+[package]
+name = "perga-core"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# Backend transports + 终端 session 引擎。perga-core 不直接拉 axum / tauri,
+# 由调用方(perga-server / perga-tauri)做协议封装。
+transport = { path = "../transport" }
+pty = { path = "../pty" }
+ssh = { path = "../ssh" }
+terminal-engine = { path = "../terminal-engine", features = ["serde"] }
+terminal-protocol = { path = "../terminal-protocol" }
+terminal-input = { path = "../terminal-input", features = ["serde"] }
+terminal-session = { path = "../terminal-session" }
+
+# 配置文件 / wire 类型用 serde + toml。
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

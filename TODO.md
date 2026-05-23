@@ -97,22 +97,40 @@ selection vs TUI mouse 的事件优先级时。
 
 ---
 
-## 移动端 SSH UX(平板 always-SSH + 无 profile 时弹配置卡)
+## 移动端打包目标(Android / iOS)
 
-**现状**:Phase 5 v1 在桌面 web/dev 形态下 SSH 是 **side-door** —— 设置面板里
-列 `~/.perga/hosts.toml` 中的 profile,点 Connect 新开 tab。`+` 按钮 / 快捷键
-仍然只开本地 shell。
+**现状**:Phase 6 v1 完成了**前端**移动端 UX hooks(`web/src/util/platform.ts`
++ `web/src/ui/profile_picker.tsx` + tab_bar 的 `+` 分支),并通过
+`?platform=mobile` 在浏览器里能验证。但**实际 Android / iOS bundle 没打**——
+v1 只打 Linux。
 
-**触发条件**:Phase 6 Tauri mobile(Android / iOS)接入时,平板没有"本地
-shell"概念。届时:
+**已知偏差**:
 
-- 平板形态 `+` 直接走 SSH。
-- 没配 host 时弹配置卡引导用户填一台 host。
-- 桌面侧保留 side-door 不变。
+- 工作区启动还是会无条件创建一个 default local-shell tab(`createWorkspace`
+  里 `tabs: [makeTab()]` 硬编)。在 Tauri mobile 上 `portable-pty` 不可用,
+  这个 default tab 会失败。当前用 `forceSetup=true` 的 picker modal 抢覆盖,
+  但 default tab 仍是僵尸。
+- `crates/pty` / `crates/ssh` 没加 `#[cfg(not(any(target_os = "android",
+  target_os = "ios")))]` gate;`cargo check --target aarch64-linux-android` 会
+  在 portable-pty 上炸。
 
-**涉及**:`web/src/state/workspace.ts`(`newTab` 在平板下改成 default profile
-路径)、`web/src/ui/settings_panel.tsx`(配置卡 UI)、Tauri 平台检测 hook
-(等 Phase 6 引入)。
+**触发条件**:实际要在平板上发版时。
+
+**要做**:
+
+1. **PTY cfg gate**:`crates/pty` 改成只在桌面 target 编;`terminal-session::spawn_local`
+   也跟着 gate;`perga-core::session_factory::open_local` 在 mobile target 直接
+   `unreachable!()` 或 panic。
+2. **Workspace 初始 tab**:平台是 mobile 时不预创建 default tab,workspace
+   `tabs` 起步为空,picker 用户选一个 profile 才 newTab。需要解开"必有一
+   tab"的 invariant 或允许 zero-tab 启动态。
+3. **Android signing** + **iOS Apple Developer**:走 `cargo tauri android init` /
+   `cargo tauri ios init`,准备 keystore 与签名 profile。
+4. **真机调试**:`cargo tauri android dev` / `ios dev` 走 USB / 模拟器。
+
+**涉及**:`crates/pty/Cargo.toml` + lib.rs(cfg gate)、`crates/perga-core/src/session_factory.rs`、
+`crates/perga-tauri/`(Android / iOS init)、`web/src/state/workspace.ts`(zero-tab
+初始态)。
 
 ---
 
@@ -193,3 +211,51 @@ host key + agent stub),`SshSession::spawn` 连过去跑一条 echo,验 round-tri
 
 **涉及**:`crates/terminal-engine/src/engine.rs`(`advance_alacritty`、
 `take_scrolled_rows`)。
+
+---
+
+## Tauri Linux bundle 美化 / 跨桌面 OS / 代码签名
+
+**现状**:Phase 6 v1 完成 Tauri 集成,Linux 桌面 `cargo build -p perga-tauri`
+通过、`cargo tauri info` 识别配置。但:
+
+- 应用 icon 是 1x1 透明 RGBA 占位 PNG(`crates/perga-tauri/icons/`);bundle
+  出的 deb / AppImage 没图标。
+- Windows / macOS 桌面 build **未实测**;架构兼容、Cargo.toml 不带 OS-specific
+  代码,但没真跑过 `cargo build --target` 验证。
+- AppImage / deb **没签名 / 没 updater**:用户下载 unsigned 包要手动
+  approve;无内置升级路径。
+
+**触发条件**:正式发布 v1 桌面包之前。
+
+**要做**:
+
+1. **Icon 完整稿**:画一套 32 / 128 / 128@2x / 512 + .ico + .icns,跑
+   `cargo tauri icon <source.png>` 生成全套。
+2. **Windows / macOS 实测**:`cargo build` 跨编译,验证 webview 调用与 PTY/
+   portable-pty 在 macOS / Windows 都过。
+3. **Tauri updater plugin**:`cargo add tauri-plugin-updater`,签名 keypair 用
+   `cargo tauri signer generate`,发布 endpoint 配 GitHub Releases。
+4. **代码签名**:Linux 不强制;Windows / macOS 各自 EV cert / Developer ID。
+
+**涉及**:`crates/perga-tauri/{tauri.conf.json,icons/}`、`web/`(打包流程)。
+
+---
+
+## Default-tab 启动 vs Tauri mobile
+
+**现状**:`createWorkspace()` 同步初始化时强制 `tabs: [makeTab()]`,即
+"workspace 永远 ≥1 tab" invariant。Phase 6 v1 移动端 UX 通过 `forceSetup`
+picker 抢一个覆盖层,但底下那个 local-shell tab 仍然存在,在真 Android / iOS
+build 上会 spawn 失败。
+
+**触发条件**:同上 "移动端打包目标"。要等到第一次跑 mobile bundle、看到
+default tab 失败时一并改。
+
+**要做**:
+- 选项 A:解开 "≥1 tab" invariant,允许 zero-tab 启动态;picker 选 profile
+  后才 `newTabWithProfile`。
+- 选项 B:`createWorkspace(initialProfileId?)` 接收 init,平台层在 mobile
+  形态下不传 → 不预创建。需要异步初始化(picker → 选 profile → 装载)。
+
+**涉及**:`web/src/state/workspace.ts`、`web/src/ui/app.tsx`。

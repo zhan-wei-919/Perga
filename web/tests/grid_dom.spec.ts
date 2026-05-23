@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   cursorOverlayModel,
+  debugGridRowSegments,
   gridDomSize,
   segmentsForGridRow,
 } from "../src/render/grid_dom";
@@ -46,13 +47,14 @@ describe("segmentsForGridRow", () => {
   });
 
   it("keeps interior spaces and trims trailing default blanks", () => {
-    const segs = segmentsForGridRow(
+    const segs = debugGridRowSegments(
       [cell("a"), cell(" "), cell("b"), cell(" "), cell(" ")],
       5,
     );
-    expect(segs).toHaveLength(1);
-    expect(segs[0].text).toBe("a b");
-    expect(segs[0].widthCells).toBe(3);
+    expect(segs).toEqual([
+      { xCell: 0, text: "a", widthCells: 1 },
+      { xCell: 2, text: "b", widthCells: 1 },
+    ]);
   });
 
   it("keeps trailing blanks when their background is meaningful", () => {
@@ -81,6 +83,40 @@ describe("segmentsForGridRow", () => {
     expect(segs.map((s) => [s.text, s.widthCells])).toEqual([
       ["中", 2],
       ["x", 1],
+    ]);
+  });
+
+  it("groups adjacent wide glyphs so browser fallback fonts do not insert per-glyph gaps", () => {
+    const segs = debugGridRowSegments(
+      [
+        cell("公", { width: "wide" }),
+        cell(" ", { width: "wide_spacer" }),
+        cell("共", { width: "wide" }),
+        cell(" ", { width: "wide_spacer" }),
+        cell("x"),
+      ],
+      5,
+    );
+    expect(segs).toEqual([
+      { xCell: 0, text: "公共", widthCells: 4 },
+      { xCell: 4, text: "x", widthCells: 1 },
+    ]);
+  });
+
+  it("serializes column positions across styled gaps for debugging", () => {
+    const blue: Color = { named: "blue" };
+    const row = [
+      ...Array.from("apps", (ch) => cell(ch, { fg: blue })),
+      cell(" "),
+      cell(" "),
+      cell(" "),
+      cell(" "),
+      ...Array.from("key", (ch) => cell(ch)),
+    ];
+
+    expect(debugGridRowSegments(row, row.length)).toEqual([
+      { xCell: 0, text: "apps", widthCells: 4 },
+      { xCell: 8, text: "key", widthCells: 3 },
     ]);
   });
 

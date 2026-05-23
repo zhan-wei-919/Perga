@@ -1,4 +1,4 @@
-//! Host profile 存储:`~/.perga/hosts.toml` 的读取 + 写入 + 翻译。
+//! Host profile 存储:`hosts.toml` 的读取 + 写入 + 翻译。
 //!
 //! **用户**通过前端设置面板的 CRUD UI 增删改 host,**不直接接触文件** ──
 //! `hosts.toml` 仅是后端的持久化实现细节。写入走原子写(临时文件 + rename),
@@ -7,7 +7,7 @@
 //! 不缓存:每次操作都读盘 → 改 → 原子写。文件小,IO 开销忽略;换来「外部
 //! 编辑(虽然不推荐)与 UI 操作不冲突」的简单语义。
 //!
-//! schema(`~/.perga/hosts.toml`):
+//! schema(默认 `~/.perga/hosts.toml`,Tauri 打包形态走 `app_data_dir()`):
 //!
 //! ```toml
 //! [[hosts]]
@@ -23,6 +23,13 @@
 //! `auth` 用 tagged enum:`agent` 走系统 ssh-agent(桌面);`password` 明文
 //! 由前端表单填,适用桌面 + 平板(平板没有 ssh-agent)。后续若加 `key_file`
 //! / `keyboard_interactive`,加一个 variant 不破坏现有 schema。
+//!
+//! # 路径注入
+//!
+//! 所有 IO 主接口都接受 `&Path` 参数(`*_at` 系列):perga-server 走
+//! `default_profiles_path()` 解析 `$HOME/.perga/hosts.toml`,perga-tauri 走
+//! `app.path().app_data_dir()`。`load_profiles()` / `create_profile()` 等
+//! 无参 wrapper 是为 dev 桌面侧的简便起见保留,内部仍是调 `*_at`。
 
 use std::path::{Path, PathBuf};
 
@@ -66,8 +73,8 @@ pub enum AuthSpec {
     Password { password: String },
 }
 
-/// 给前端 `GET /api/hosts` 的简化视图 ── **不**返回密码明文,只返回
-/// 「使用什么 auth 方式」给 UI 选择性显示(比如显示 🔑 / 🔒 图标)。
+/// 给前端的 list 视图 ── **不**返回密码明文,只返回「使用什么 auth 方式」
+/// 给 UI 选择性显示(比如显示 🔑 / 🔒 图标)。
 #[derive(Debug, Clone, Serialize)]
 pub struct HostProfileSummary {
     pub id: String,
@@ -99,19 +106,17 @@ const fn default_port() -> u16 {
     22
 }
 
-/// 读 `~/.perga/hosts.toml`。
-///
-/// 文件不存在 → **返回空 Vec**(没配 host 是合法状态,不报错)。
-/// 文件存在但解析失败 → 返回 Err,让上层暴露具体原因(toml 行号、字段名)。
-///
-/// 不缓存:每次调用都读盘。文件小,IO 开销忽略;换来「改完立刻生效」的
-/// 简单语义,不需要 watch / reload 路径。
+/// 读默认路径(`$HOME/.perga/hosts.toml`)的 profile。仅 dev 桌面调用。
 pub fn load_profiles() -> Result<Vec<HostProfile>, ProfileError> {
     let path = default_profiles_path()?;
     load_profiles_from(&path)
 }
 
-/// 直接从指定路径读 profile —— 测试隔离用,生产路径走 [`load_profiles`]。
+/// 从指定路径读 profile —— **主接口**。perga-tauri 走 `app_data_dir()`,
+/// perga-server 走 `default_profiles_path()`,测试走 tempfile。
+///
+/// 文件不存在 → 返回空 Vec(没配 host 是合法状态,不报错)。
+/// 文件存在但解析失败 → 返回 Err,让上层暴露具体原因(toml 行号、字段名)。
 pub fn load_profiles_from(path: &Path) -> Result<Vec<HostProfile>, ProfileError> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
@@ -121,7 +126,7 @@ pub fn load_profiles_from(path: &Path) -> Result<Vec<HostProfile>, ProfileError>
     let file: HostsFile = toml::from_str(&text)
         .map_err(|e| ProfileError::Parse(format!("{}: {e}", path.display())))?;
 
-    // 重复 id 校验 —— `?profile=<id>` 必须唯一指向一台 host。
+    // 重复 id 校验 —— 通过 id 引用 host 必须唯一。
     let mut seen = std::collections::HashSet::new();
     for h in &file.hosts {
         if !seen.insert(h.id.as_str()) {
@@ -142,8 +147,10 @@ pub fn find_profile(profiles: &[HostProfile], id: &str) -> Option<HostProfile> {
 }
 
 /// Profile → SSH backend 配置的翻译。`crates/ssh` 不知道 profile 概念,
-/// 由 server 在这里做映射。
-pub fn to_ssh_config(profile: &HostProfile) -> ssh::SshConfig {
+/// 由 caller 在这里做映射。`known_hosts_path` 由调用方决定:perga-server 传
+/// `None`(让 ssh crate 走 `~/.ssh/known_hosts`),perga-tauri 传
+/// `Some(app_data_dir.join("known_hosts"))`。
+pub fn to_ssh_config(profile: &HostProfile, known_hosts_path: Option<PathBuf>) -> ssh::SshConfig {
     let auth = match &profile.auth {
         AuthSpec::Agent => ssh::Auth::Agent,
         AuthSpec::Password { password } => ssh::Auth::Password {
@@ -155,21 +162,19 @@ pub fn to_ssh_config(profile: &HostProfile) -> ssh::SshConfig {
         port: profile.port,
         user: profile.user.clone(),
         auth,
-        known_hosts_path: None,
+        known_hosts_path,
     }
 }
 
 // ───────────────────── CRUD(增删改)─────────────────────
 
-/// 创建一个新 host profile,**追加**写回。
-///
-/// 失败:id 已存在(`Conflict`)、校验不过(`Validation`)、IO / 解析错。
+/// 创建一个新 host profile,**追加**写回默认路径。
 pub fn create_profile(profile: HostProfile) -> Result<HostProfile, ProfileError> {
     let path = default_profiles_path()?;
     create_profile_at(&path, profile)
 }
 
-/// 测试隔离版本:[`create_profile`] 直接对指定路径操作。
+/// **主接口**:对指定路径执行 create。
 pub fn create_profile_at(path: &Path, profile: HostProfile) -> Result<HostProfile, ProfileError> {
     validate_profile(&profile)?;
     let mut existing = load_profiles_from(path)?;
@@ -190,6 +195,7 @@ pub fn update_profile(id: &str, updated: HostProfile) -> Result<HostProfile, Pro
     update_profile_at(&path, id, updated)
 }
 
+/// **主接口**:对指定路径执行 update。
 pub fn update_profile_at(
     path: &Path,
     id: &str,
@@ -212,12 +218,13 @@ pub fn update_profile_at(
     Ok(updated)
 }
 
-/// 删除一个 host profile。id 不存在返 `NotFound`(让前端弹清晰错误)。
+/// 删除一个 host profile。id 不存在返 `NotFound`。
 pub fn delete_profile(id: &str) -> Result<(), ProfileError> {
     let path = default_profiles_path()?;
     delete_profile_at(&path, id)
 }
 
+/// **主接口**:对指定路径执行 delete。
 pub fn delete_profile_at(path: &Path, id: &str) -> Result<(), ProfileError> {
     let mut existing = load_profiles_from(path)?;
     let idx = existing
@@ -302,10 +309,8 @@ fn validate_profile(p: &HostProfile) -> Result<(), ProfileError> {
     Ok(())
 }
 
-/// 默认 `~/.perga/hosts.toml` 路径。
-///
-/// Phase 6 Tauri:把这里换成 `app.path().app_data_dir()`,其他代码不动 —— 桌面 /
-/// 移动端都自动落到各 OS 的 sandbox 目录(见 `docs/state-*.md` §9)。
+/// 默认 dev 桌面路径 `$HOME/.perga/hosts.toml`。perga-tauri 打包形态不调,
+/// 走 `app.path().app_data_dir()`。
 fn default_profiles_path() -> Result<PathBuf, ProfileError> {
     let home = std::env::var_os("HOME").ok_or_else(|| {
         ProfileError::Io("$HOME not set; cannot locate ~/.perga/hosts.toml".into())
@@ -489,7 +494,7 @@ mod tests {
             user: "deploy".into(),
             auth: AuthSpec::Agent,
         };
-        let cfg = to_ssh_config(&profile);
+        let cfg = to_ssh_config(&profile, None);
         assert_eq!(cfg.host, "h.example.com");
         assert_eq!(cfg.port, 2222);
         assert_eq!(cfg.user, "deploy");
@@ -509,11 +514,26 @@ mod tests {
                 password: "s3cret".into(),
             },
         };
-        let cfg = to_ssh_config(&profile);
+        let cfg = to_ssh_config(&profile, None);
         match cfg.auth {
             ssh::Auth::Password { password } => assert_eq!(password, "s3cret"),
             other => panic!("expected password auth, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn ssh_config_translation_with_known_hosts_path() {
+        let profile = HostProfile {
+            id: "p".into(),
+            name: "P".into(),
+            host: "h".into(),
+            port: 22,
+            user: "u".into(),
+            auth: AuthSpec::Agent,
+        };
+        let custom = PathBuf::from("/tmp/perga/test/known_hosts");
+        let cfg = to_ssh_config(&profile, Some(custom.clone()));
+        assert_eq!(cfg.known_hosts_path.as_deref(), Some(custom.as_path()));
     }
 
     fn sample_profile(id: &str, host: &str) -> HostProfile {
