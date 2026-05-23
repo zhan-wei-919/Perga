@@ -60,11 +60,15 @@ export const App: Component = () => {
   const applyShortcut = (action: WorkspaceAction): void => {
     switch (action.kind) {
       case "split":
-        // split 在 v1 永远开本地 shell(`crates/web/state/workspace.ts` 的
-        // `splitFocused` 注释:不继承 profile)。mobile / unknown 上本地不可达
-        // ── shortcut no-op 防止键盘用户在 SSH tab 里 split 出炸的 local pane。
-        // "在 SSH 远端再开一个嵌套 SSH 子会话"留给后续(workspace.ts §makeTab)。
-        if (isLocalAllowed()) workspace.splitFocused(action.axis);
+        if (isLocalAllowed()) {
+          workspace.splitFocused(action.axis);
+          break;
+        }
+        // 移动端没有本地 PTY;分屏必须继承当前 SSH profile,否则会创建一个
+        // 必然失败的 local pane。空态 / 异常 local pane 下退回 picker。
+        const profileId = workspace.focusedSession()?.profileId;
+        if (profileId) workspace.splitFocused(action.axis, profileId);
+        else setPickerOpen(true);
         break;
       case "close":
         workspace.closeFocused();

@@ -9,8 +9,9 @@
 // `Ctrl+T/W/N/Tab` 和 `Ctrl+数字`;但它不碰 `Ctrl+Shift+数字` / `Ctrl+Shift+X`
 // 这类组合。进 Tauri(Phase 6,无浏览器 chrome)后这层约束消失,届时可重排。
 //
-// 用 `e.code`(物理键位)而非 `e.key`:跨键盘布局稳健,且不受 Shift 改变
-// `e.key` 大小写的影响。
+// 优先用 `e.code`(物理键位):跨键盘布局稳健,且不受 Shift 改变 `e.key`
+// 大小写的影响。Android WebView / 物理键盘组合有时不给稳定 code,所以对
+// 字母 / 数字 / Enter / Arrow 做 `e.key` fallback。
 
 import type { SplitAxis } from "../state/pane_tree";
 
@@ -29,7 +30,7 @@ export function matchWorkspaceShortcut(e: KeyboardEvent): WorkspaceAction | null
 
   // Ctrl+Shift+<key>:全部 tab / pane 操作。
   if (e.ctrlKey && e.shiftKey && !e.altKey) {
-    switch (e.code) {
+    switch (shortcutKey(e)) {
       case "KeyD":
         return { kind: "split", axis: "vertical" };
       case "KeyE":
@@ -42,14 +43,14 @@ export function matchWorkspaceShortcut(e: KeyboardEvent): WorkspaceAction | null
         return { kind: "nextTab" };
     }
     // Ctrl+Shift+1..9:直接切到第 N 个 tab。
-    const digit = digitFromCode(e.code);
+    const digit = digitFromCode(shortcutKey(e));
     if (digit !== null) return { kind: "switchTab", index: digit - 1 };
     return null;
   }
 
   // Alt+方向键:移焦到空间相邻 pane。
   if (e.altKey && !e.ctrlKey && !e.shiftKey) {
-    switch (e.code) {
+    switch (shortcutKey(e)) {
       case "ArrowUp":
         return { kind: "focus", dir: "up" };
       case "ArrowDown":
@@ -70,4 +71,11 @@ export function matchWorkspaceShortcut(e: KeyboardEvent): WorkspaceAction | null
 function digitFromCode(code: string): number | null {
   const m = /^Digit([1-9])$/.exec(code);
   return m ? Number(m[1]) : null;
+}
+
+function shortcutKey(e: KeyboardEvent): string {
+  if (e.code) return e.code;
+  if (/^[a-z]$/i.test(e.key)) return `Key${e.key.toUpperCase()}`;
+  if (/^[1-9]$/.test(e.key)) return `Digit${e.key}`;
+  return e.key;
 }

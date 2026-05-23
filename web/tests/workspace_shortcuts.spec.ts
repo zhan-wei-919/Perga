@@ -7,6 +7,11 @@ import { matchWorkspaceShortcut } from "../src/input/workspace_shortcuts";
 const key = (code: string, mods: Partial<KeyboardEventInit> = {}): KeyboardEvent =>
   new KeyboardEvent("keydown", { code, ...mods });
 
+const androidKey = (
+  keyValue: string,
+  mods: Partial<KeyboardEventInit> = {},
+): KeyboardEvent => new KeyboardEvent("keydown", { key: keyValue, ...mods });
+
 const ctrlShift = { ctrlKey: true, shiftKey: true };
 
 describe("matchWorkspaceShortcut", () => {
@@ -18,6 +23,21 @@ describe("matchWorkspaceShortcut", () => {
     expect(matchWorkspaceShortcut(key("KeyE", ctrlShift))).toEqual({
       kind: "split",
       axis: "horizontal",
+    });
+  });
+
+  it("falls back to key when Android WebView omits code", () => {
+    expect(matchWorkspaceShortcut(androidKey("E", ctrlShift))).toEqual({
+      kind: "split",
+      axis: "horizontal",
+    });
+    expect(matchWorkspaceShortcut(androidKey("d", ctrlShift))).toEqual({
+      kind: "split",
+      axis: "vertical",
+    });
+    expect(matchWorkspaceShortcut(androidKey("1", ctrlShift))).toEqual({
+      kind: "switchTab",
+      index: 0,
     });
   });
 

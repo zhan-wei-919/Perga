@@ -27,6 +27,18 @@ describe("matchZoomShortcut", () => {
     ).toEqual({ kind: "zoomReset" });
   });
 
+  it("falls back to key when Android WebView omits code", () => {
+    expect(matchZoomShortcut(ke({ key: "+", ctrlKey: true, shiftKey: true }))).toEqual({
+      kind: "zoomIn",
+    });
+    expect(matchZoomShortcut(ke({ key: "-", ctrlKey: true, shiftKey: true }))).toEqual({
+      kind: "zoomOut",
+    });
+    expect(matchZoomShortcut(ke({ key: "0", ctrlKey: true, shiftKey: true }))).toEqual({
+      kind: "zoomReset",
+    });
+  });
+
   it("裸 Ctrl+=(无 Shift)→ null —— 让位浏览器缩放", () => {
     expect(matchZoomShortcut(ke({ code: "Equal", ctrlKey: true }))).toBeNull();
   });

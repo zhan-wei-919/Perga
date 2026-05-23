@@ -118,6 +118,20 @@ describe("pane lifecycle", () => {
     for (const id of ids) expect(ws.sessionFor(id).id).toBe(id);
   });
 
+  it("splitFocused can bind the new pane to an SSH profile", () => {
+    const ws = createWorkspace();
+    ws.newTabWithProfile("host-a");
+    const before = ws.state.tabs[0].focusedLeaf;
+
+    ws.splitFocused("horizontal", "host-a");
+
+    const tab = ws.state.tabs[0];
+    const after = tab.focusedLeaf;
+    expect(after).not.toBe(before);
+    expect(ws.sessionFor(before).profileId).toBe("host-a");
+    expect(ws.sessionFor(after).profileId).toBe("host-a");
+  });
+
   it("splitFocused is a no-op when tabs is empty", () => {
     const ws = createWorkspace();
     expect(() => ws.splitFocused("vertical")).not.toThrow();

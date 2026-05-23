@@ -84,7 +84,7 @@ export type Workspace = {
   closeTab(tabId: string): void;
   switchTab(index: number): void;
   nextTab(): void;
-  splitFocused(axis: SplitAxis): void;
+  splitFocused(axis: SplitAxis, profileId?: string): void;
   closeFocused(): void;
   focusNeighbor(dir: FocusDir): void;
   focusLeaf(id: LeafId): void;
@@ -204,9 +204,8 @@ export function createWorkspace(
   };
 
   // 造一个全新 tab:一个 leaf + 它的 session。`profileId` 透到 leaf。
-  // split 出来的子 pane 不继承 profile —— split 总是开本地 shell,因为
-  // 「在 SSH 远端再开一个 SSH 子会话」不是 v1 的产品语义(那需要 Multi-channel
-  // 或嵌套 ssh,留给后续)。
+  // split 默认仍开本地 shell;移动端没有本地 PTY,App 层会显式把当前 SSH
+  // profile 传进 splitFocused,让新 pane 复用同一个远程主机。
   const makeTab = (profileId?: string): Tab => {
     const leaf = createLeaf(profileId);
     return { id: `tab-${tabSeq++}`, tree: leafTree(leaf), focusedLeaf: leaf };
@@ -284,11 +283,16 @@ export function createWorkspace(
     setStore("activeTab", (store.activeTab + 1) % store.tabs.length);
   };
 
-  const splitFocused = (axis: SplitAxis): void => {
+  const splitFocused = (axis: SplitAxis, profileId?: string): void => {
     const idx = store.activeTab;
     const tab = store.tabs[idx];
     if (!tab) return; // 空 tabs:no-op
-    const edit = treeSplitFocused(tab.tree, tab.focusedLeaf, axis, createLeaf());
+    const edit = treeSplitFocused(
+      tab.tree,
+      tab.focusedLeaf,
+      axis,
+      createLeaf(profileId),
+    );
     setStore(
       produce((s) => {
         s.tabs[idx].tree = edit.tree;

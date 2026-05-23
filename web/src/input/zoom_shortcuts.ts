@@ -5,7 +5,8 @@
 // `workspace_shortcuts.ts` 记录的 chrome 约束)。设置面板的滑块始终可用,
 // 键盘只是快捷方式。进 Tauri(Phase 6,无浏览器 chrome)后可再加裸键。
 //
-// 用 `e.code`(物理键位):跨布局稳健,不受 Shift 改 `e.key` 大小写影响。
+// 优先用 `e.code`(物理键位):跨布局稳健,不受 Shift 改 `e.key` 大小写影响。
+// Android WebView / 物理键盘组合有时不给稳定 code,所以做 `e.key` fallback。
 
 export type ZoomAction = { kind: "zoomIn" | "zoomOut" | "zoomReset" };
 
@@ -13,7 +14,7 @@ export type ZoomAction = { kind: "zoomIn" | "zoomOut" | "zoomReset" };
 export function matchZoomShortcut(e: KeyboardEvent): ZoomAction | null {
   if (e.metaKey) return null;
   if (!e.ctrlKey || !e.shiftKey || e.altKey) return null;
-  switch (e.code) {
+  switch (shortcutKey(e)) {
     case "Equal":
       return { kind: "zoomIn" };
     case "Minus":
@@ -23,4 +24,12 @@ export function matchZoomShortcut(e: KeyboardEvent): ZoomAction | null {
     default:
       return null;
   }
+}
+
+function shortcutKey(e: KeyboardEvent): string {
+  if (e.code) return e.code;
+  if (e.key === "=" || e.key === "+") return "Equal";
+  if (e.key === "-" || e.key === "_") return "Minus";
+  if (e.key === "0" || e.key === ")") return "Digit0";
+  return e.key;
 }
