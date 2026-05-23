@@ -53,18 +53,6 @@ const THEME_LABELS: Record<ThemeId, string> = {
   light: "浅色",
 };
 
-const FONT_LABELS: Record<FontId, string> = {
-  default: "默认",
-  compact: "紧凑",
-  cjk: "中文",
-};
-
-const FONT_SAMPLES: Record<FontId, string> = {
-  default: "Aa 中 123",
-  compact: "Aa 中 123",
-  cjk: "Aa 中 123",
-};
-
 const ZOOM_COMMIT_DELAY = 120;
 
 export type SettingsPanelProps = {
@@ -241,17 +229,29 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
                 <div style={fieldHeadStyle}>
                   <span style={fieldLabelStyle}>终端字体</span>
                 </div>
-                <div style={choiceGridStyle("3")}>
+                <div style={fontChoiceListStyle}>
                   <For each={FONT_IDS}>
                     {(id) => (
                       <button
                         type="button"
-                        style={choiceStyle(settings.state.fontId === id)}
+                        style={fontChoiceStyle(settings.state.fontId === id)}
                         onClick={() => settings.setFont(id)}
                       >
-                        <span>{FONT_LABELS[id]}</span>
+                        <span style={fontChoiceHeadStyle}>
+                          <span style={fontNameStyle}>
+                            {FONT_PRESETS[id].name}
+                          </span>
+                          <span style={fontPrimaryStyle}>
+                            {FONT_PRESETS[id].primary}
+                          </span>
+                        </span>
+                        <span style={fontDescriptionStyle}>
+                          {FONT_PRESETS[id].description}
+                        </span>
                         <span style={fontPreviewStyle(id)}>
-                          {FONT_SAMPLES[id]}
+                          <For each={FONT_PRESETS[id].sampleLines}>
+                            {(line) => <span>{line}</span>}
+                          </For>
                         </span>
                       </button>
                     )}
@@ -658,6 +658,55 @@ function choiceStyle(active: boolean): Record<string, string> {
   };
 }
 
+const fontChoiceListStyle: Record<string, string> = {
+  display: "flex",
+  "flex-direction": "column",
+  gap: "10px",
+};
+
+function fontChoiceStyle(active: boolean): Record<string, string> {
+  return {
+    display: "flex",
+    "flex-direction": "column",
+    "align-items": "stretch",
+    gap: "7px",
+    padding: "10px 12px",
+    "text-align": "left",
+    "font-family": "ui-monospace, monospace",
+    cursor: "pointer",
+    "border-radius": "5px",
+    border: active
+      ? "1px solid var(--pg-accent)"
+      : "1px solid var(--pg-overlay-border)",
+    background: active ? "var(--pg-overlay-hover)" : "transparent",
+    color: "var(--term-foreground)",
+  };
+}
+
+const fontChoiceHeadStyle: Record<string, string> = {
+  display: "flex",
+  "justify-content": "space-between",
+  "align-items": "baseline",
+  gap: "12px",
+};
+
+const fontNameStyle: Record<string, string> = {
+  "font-size": "13px",
+  "font-weight": "600",
+};
+
+const fontPrimaryStyle: Record<string, string> = {
+  "font-size": "11px",
+  color: "var(--pg-fg-dim)",
+  "white-space": "nowrap",
+};
+
+const fontDescriptionStyle: Record<string, string> = {
+  "font-size": "11px",
+  color: "var(--pg-fg-dim)",
+  "line-height": "1.35",
+};
+
 const themeSwatchesStyle: Record<string, string> = {
   display: "flex",
   gap: "4px",
@@ -677,9 +726,19 @@ function themeSwatchStyle(color: string): Record<string, string> {
 
 function fontPreviewStyle(id: FontId): Record<string, string> {
   return {
+    display: "flex",
+    "flex-direction": "column",
+    gap: "2px",
+    padding: "8px 10px",
     "font-family": FONT_PRESETS[id].family,
-    "font-size": "12px",
-    color: "var(--pg-fg-dim)",
+    "font-size": "13px",
+    "line-height": "1.35",
+    "font-variant-ligatures": "none",
+    color: "var(--term-foreground)",
+    background: "var(--term-background)",
+    border: "1px solid var(--pg-overlay-border)",
+    "border-radius": "4px",
     "white-space": "nowrap",
+    overflow: "hidden",
   };
 }
