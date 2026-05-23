@@ -296,8 +296,8 @@ const emptyStateButtonStyle: Record<string, string> = {
 };
 
 const rootStyle: Record<string, string> = {
-  width: "100vw",
-  height: "100vh",
+  width: "100%",
+  height: "100%",
   // position:relative ── 给 absolute 定位的 tab 栏当锚点。
   position: "relative",
   display: "flex",
