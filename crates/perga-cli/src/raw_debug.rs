@@ -1,8 +1,8 @@
 //! PTY → protocol JSON 调试模式。
 //!
-//! 这里故意不进 raw mode,也不接前端:宿主 stdin 以行模式进 PTY,
+//! 这里故意不进 raw mode,也不接客户端:宿主 stdin 以行模式进 PTY,
 //! `TransportEvent::Output` 经 `terminal-engine` 和 `terminal-protocol` 变成
-//! pretty JSON。这样能单独看后端会发给前端的协议消息。
+//! pretty JSON。这样能单独看后端会发给客户端的协议消息。
 
 use std::io::{self, Write};
 use std::os::fd::{AsRawFd, BorrowedFd};

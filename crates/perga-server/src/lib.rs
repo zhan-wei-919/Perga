@@ -1,19 +1,17 @@
-//! `perga-server`:axum + tokio 把 `TerminalSession` 暴露成 WebSocket 服务。
+//! `perga-server`:axum + tokio 把 `TerminalSession` 暴露成 WebSocket / HTTP 服务。
 //!
-//! **角色:dev 浏览器迭代用 adapter**。Phase 6 后 production 入口换成 `perga-tauri`
-//! 的 IPC,不再依赖本进程;开发期前端仍跑在 `localhost:5173`(Vite),通过
-//! `/api/*` proxy 转 7777 用本服务,享受浏览器 devtools 与热重载。
+//! **角色:Rust core 的开发、测试和 daemon prototype adapter**。长期产品入口转向
+//! 各平台原生客户端;本 crate 保留为本地服务、协议 replay 和集成测试入口。
 //!
-//! 与协议无关的核心(profile CRUD、ClientMessage、session 工厂)在 `perga-core`,
-//! 由本 crate 与 `perga-tauri` 共享。本 crate 只做 axum / WS 缝合 + 默认路径解析。
+//! 与协议无关的核心(profile CRUD、ClientMessage、session 工厂)在 `perga-core`。
+//! 本 crate 只做 axum / WS 缝合 + 默认路径解析。
 //!
 //! tokio runtime 是 server 专属的 side-pool;PTY / engine / session 全部
 //! 仍跑在 sync 线程,只在 [`bridge`] 这一处缝合(CLAUDE.md §运行时模型)。
 //!
 //! **平台**:仅桌面(Linux / macOS / Windows)。直接调 `perga_core::open_local`,
-//! 不做 mobile target gate ── 移动端生产入口是 `perga-tauri` 的 IPC,不会拉到
-//! 本 crate。`cargo check --workspace --target aarch64-linux-android` 不在
-//! 保证范围;mobile build 命令明确用 `-p perga-tauri`。
+//! 不做 mobile target gate。移动端客户端路线见
+//! `docs/cross-platform-native-client.md`,不以本 crate 作为第一阶段入口。
 
 mod bridge;
 mod error;
@@ -31,7 +29,7 @@ use axum::Router;
 pub fn router() -> Router {
     Router::new()
         .route("/ws", get(ws::ws_handler))
-        // host profile 的 CRUD —— 前端 SSH 配置 UI 走这一组。GET 列表 + POST 创建。
+        // host profile 的 CRUD —— 客户端 SSH 配置 UI 走这一组。GET 列表 + POST 创建。
         .route("/api/hosts", get(http::list_hosts).post(http::create_host))
         // PUT 更新 + DELETE 删除(按 id 操作)。
         .route(

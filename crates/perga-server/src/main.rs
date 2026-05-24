@@ -1,5 +1,5 @@
 //! `perga-server` 二进制。默认 bind `127.0.0.1:7777`,只接受 localhost
-//! 连接 ── 远程访问由部署层负责(Tailscale / 反向代理 / Tauri 取代 WS)。
+//! 连接 ── 远程访问由部署层负责(Tailscale / 反向代理 / 原生客户端 IPC)。
 //!
 //! 端口和 bind 地址通过环境变量调整:
 //!

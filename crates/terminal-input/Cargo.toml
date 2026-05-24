@@ -5,7 +5,7 @@ version.workspace = true
 publish.workspace = true
 
 [features]
-# 和 terminal-engine 同款 feature-gated serde。Tauri 层会开 features = ["serde"]。
+# 和 terminal-engine 同款 feature-gated serde。协议/IPC 层会开 features = ["serde"]。
 serde = ["dep:serde"]
 
 [dependencies]

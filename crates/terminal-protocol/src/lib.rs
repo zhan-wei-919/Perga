@@ -1,8 +1,8 @@
 //! Terminal Engine 之上的协议编码层。
 //!
 //! 把 `terminal-engine` 暴露的 `Snapshot / TerminalModes / title` 翻译成
-//! 跨进程消息(`ProtocolEvent`),供 Tauri / IPC / 其他传输层序列化后发给
-//! 前端 webview。
+//! 跨进程消息(`ProtocolEvent`),供 IPC / native client / 其他传输层序列化后
+//! 发给客户端。
 //!
 //! 设计要点:
 //! - 顶层 `ProtocolEvent` 用 `#[serde(tag = "type")]`,前端 switch(msg.type)
@@ -12,7 +12,7 @@
 //! - `ProtocolEncoder` 持有上一帧缓存,自己做行级 diff;**不**碰 alacritty
 //!   damage API,Engine 边界保持纯净。
 //! - Encoder 不做 IO,只产 events。序列化(serde_json / MessagePack / 其他)
-//!   和 emit(Tauri / WebSocket / 其他)都是上层的事。
+//!   和发送到 IPC / socket / 其他传输层都是上层的事。
 //!
 //! # Wire format 契约(前端必须遵守)
 //!

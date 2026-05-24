@@ -147,8 +147,8 @@ async fn spawn_ssh_blocking(id: &str, size: TerminalSize) -> Result<TerminalSess
     })?;
 
     tokio::task::spawn_blocking(move || -> Result<TerminalSession, String> {
-        // known_hosts_path = None 让 ssh crate 走 `~/.ssh/known_hosts`(桌面默认);
-        // Tauri 打包形态在 perga-tauri 那边走 `app_data_dir().join("known_hosts")`。
+        // known_hosts_path = None 让 ssh crate 走 `~/.ssh/known_hosts`(桌面默认)。
+        // 后续原生客户端若需要沙盒路径,由对应 IPC wrapper 传入显式路径。
         open_ssh(&profile, size, None).map_err(|e| format!("{e}"))
     })
     .await

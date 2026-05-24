@@ -272,8 +272,8 @@ fn build_command(config: &PtyConfig) -> CommandBuilder {
         cmd.cwd(cwd);
     }
     // 默认终端能力,**之后** 被 config.env 覆盖,这样调用方仍然可以显式
-    // 指定 TERM。第一刀只对前端 web 终端宣称 xterm-256color,真正能力集
-    // 等终端引擎层接入 alacritty_terminal 后再核对。
+    // 指定 TERM。当前终端引擎按 xterm-256color 能力集推进,后续若要更精细
+    // 声明再单独核对。
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     for k in &config.env_remove {

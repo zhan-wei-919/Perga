@@ -11,7 +11,6 @@ members = [
     "crates/perga-core",
     "crates/perga-cli",
     "crates/perga-server",
-    "crates/perga-tauri",
 ]
 # 不设 default-members:`cargo test` 默认覆盖全 workspace,避免静默跳测试。
 # 跑 perga-cli 用 `cargo run -p perga-cli`,跑 server 用 `cargo run -p perga-server`。

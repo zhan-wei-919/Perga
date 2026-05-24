@@ -9,7 +9,7 @@ name = "perga-server"
 path = "src/main.rs"
 
 [dependencies]
-# 与 Tauri 共享的协议无关核心:host profile、ClientMessage wire、session 工厂。
+# 协议无关核心:host profile、ClientMessage wire、session 工厂。
 perga-core = { path = "../perga-core" }
 
 # Server 仍直接拿这几个类型(WS 处理 / SessionParams 等签名直接用)。

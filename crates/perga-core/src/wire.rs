@@ -1,6 +1,6 @@
 //! Client → backend 输入消息的 wire 类型。
 //!
-//! WebSocket / Tauri invoke 都直接消费同一份 schema。协议形状(`tag = "type"`,
+//! IPC / HTTP / 其他传输层都直接消费同一份 schema。协议形状(`tag = "type"`,
 //! snake_case):
 //!
 //! ```jsonc

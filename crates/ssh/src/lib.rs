@@ -1,7 +1,7 @@
 //! Perga SSH backend。
 //!
 //! 用 [`russh`] 直连远端 SSH 服务器(不 spawn `ssh` 子进程,iPad / Android
-//! Tauri 沙箱也能用)。对外实现 [`transport::Transport`] —— 同步 crossbeam
+//! 沙盒客户端也能用)。对外实现 [`transport::Transport`] —— 同步 crossbeam
 //! channel 接口,和本地 [`pty::PtySession`] 完全一致,`terminal-session`
 //! 通过 `Box<dyn Transport>` 一视同仁地驱动。
 //!
@@ -13,10 +13,10 @@
 //!   OS 线程转发)与事件通路(shuttle loop 内部从 tokio 直接 send 到 crossbeam
 //!   Sender —— crossbeam send unbounded 不阻塞,无需另起线程)。
 //!
-//! v1 范围(见 `docs/state-2026-05-23.md` §9 / `~/.claude/plans/sunny-conjuring-quasar.md`):
-//! - Auth:**agent only**(`SSH_AUTH_SOCK`)。
+//! 当前范围:
+//! - Auth:`agent`(`SSH_AUTH_SOCK`) + `password`。
 //! - Host key:**静默 TOFU** on `~/.ssh/known_hosts`。
-//! - 不做 password / 2FA / jump host / agent forwarding / passphrase key file。
+//! - 不做 key file / keyboard-interactive / 2FA / jump host / agent forwarding。
 
 mod config;
 mod error;

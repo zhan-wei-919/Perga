@@ -1,6 +1,6 @@
 //! REST 端点:`/api/hosts` + `/api/hosts/:id` 的增删改查。
 //!
-//! 前端 CRUD UI 通过这些端点操作 `~/.perga/hosts.toml`(写文件 + chmod 0600
+//! 客户端 CRUD UI 通过这些端点操作 `~/.perga/hosts.toml`(写文件 + chmod 0600
 //! 由 `perga_core::profiles` 负责),用户不直接接触文件系统。
 //!
 //! 错误分类:
@@ -28,7 +28,7 @@ pub async fn list_hosts() -> Result<Json<Vec<HostProfileSummary>>, (StatusCode, 
 /// `POST /api/hosts` —— 创建一个新 host profile。
 ///
 /// body 是完整的 [`HostProfile`](含 auth 细节;`password` 字段在 `auth =
-/// { type = "password", ... }` 时由前端表单填入)。
+/// { type = "password", ... }` 时由客户端表单填入)。
 ///
 /// 成功 → 200 + 创建后的 summary。
 pub async fn create_host(
@@ -59,7 +59,7 @@ pub async fn delete_host(Path(id): Path<String>) -> Result<StatusCode, (StatusCo
 }
 
 /// `ProfileError` → HTTP status + body 字符串。把领域错误的语义直接映射到
-/// 标准 HTTP 错误类别,前端可以靠 status code 做分流。
+/// 标准 HTTP 错误类别,客户端可以靠 status code 做分流。
 fn profile_error_to_response(e: ProfileError) -> (StatusCode, String) {
     let status = match &e {
         ProfileError::NotFound(_) => StatusCode::NOT_FOUND,

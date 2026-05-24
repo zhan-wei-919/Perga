@@ -1,9 +1,9 @@
 //! 语义输入事件类型。
 //!
-//! 这些类型是 Input Encoder 的输入面 ── 前端从浏览器 DOM 事件归一化后送进来,
+//! 这些类型是 Input Encoder 的输入面 ── 客户端从平台事件归一化后送进来,
 //! Encoder 根据当前 [`TerminalModes`](terminal_engine::TerminalModes) 翻成 PTY
-//! 字节。归一化是前端的事(macOS Alt 合成的 .key 要回退到 .code、IME
-//! compositionend 拿到合成结果、focus / blur 监听 ...),这一层只看语义。
+//! 字节。归一化是客户端的事(普通文本、IME commit、快捷键、focus / blur 等),
+//! 这一层只看语义。
 //!
 //! 边界验证集中在这里:[`FunctionKey`] 限定 1..=12,[`MouseEvent::col`]/`row`
 //! 用 [`NonZeroU16`] 强制 1-indexed,Encoder 信任已经过验证的类型,不再补特殊
@@ -55,7 +55,7 @@ pub enum Key {
 /// 功能键编号:1..=12。
 ///
 /// 这是输入面的边界类型 ── 构造时验证一次,Encoder 信任范围不再做兜底。
-/// serde Deserialize 同样在边界拒绝非法值,前端送 `F13` / `F0` 会直接报错,
+/// serde Deserialize 同样在边界拒绝非法值,客户端送 `F13` / `F0` 会直接报错,
 /// 不会变成静默空字节序列。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FunctionKey(u8);
@@ -89,7 +89,7 @@ impl<'de> serde::Deserialize<'de> for FunctionKey {
     }
 }
 
-/// 修饰符。**不**暴露 `meta` ── macOS Cmd / Win 键在 webview 多半被系统吞,
+/// 修饰符。**不**暴露 `meta` ── macOS Cmd / Win 键通常先被平台 shell 处理,
 /// terminal 协议没有标准 meta 编码,加进来只会引入歧义。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize))]
@@ -100,7 +100,7 @@ pub struct Modifiers {
     pub shift: bool,
 }
 
-/// 鼠标事件。前端做 pixel → cell 转换(用最新一帧 size + DOM 容器位置),
+/// 鼠标事件。客户端做 pixel → cell 转换(用最新一帧 size + surface 位置),
 /// 这一层只看 1-indexed 网格坐标。
 ///
 /// `col` / `row` 用 [`NonZeroU16`] 强制 ≥ 1 ── 0 在 1-indexed 网格里没意义,

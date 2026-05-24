@@ -8,23 +8,23 @@
 
 use std::fs;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// 跑 `perga raw-debug`,喂 `input` 后关 stdin,返回 (是否在 limit 内退出, stdout)。
-fn run_raw_debug(input: &[u8], limit: Duration) -> (bool, String) {
+fn run_raw_debug(shell: &Path, input: &[u8], limit: Duration) -> (bool, String) {
     let home = temp_home();
     fs::create_dir_all(&home).expect("create temp HOME");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_perga"))
         .arg("raw-debug")
-        // 固定 bash:fish / pwsh 等不支持 shell 集成注入,不会有 command_end;
-        // 那种环境下的失败与 EOF 收尾无关,会让本测试给出误导性结论。
-        .env("SHELL", "/bin/bash")
+        .env("SHELL", shell)
         // shell integration 需要写 $HOME/.perga/shell。测试环境的真实 HOME
         // 可能在沙箱外只读,这里给子进程一个可写 HOME,否则不会有 OSC 133。
         .env("HOME", &home)
+        // zsh 注入会转源用户原始 ZDOTDIR;测试必须隔离真实用户配置。
+        .env_remove("ZDOTDIR")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -50,6 +50,13 @@ fn run_raw_debug(input: &[u8], limit: Duration) -> (bool, String) {
     (exited, output)
 }
 
+fn integration_shell() -> Option<PathBuf> {
+    ["/bin/zsh", "/usr/bin/zsh", "/bin/bash", "/usr/bin/bash"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|p| p.exists())
+}
+
 fn temp_home() -> std::path::PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -63,31 +70,35 @@ fn temp_home() -> std::path::PathBuf {
 
 #[test]
 fn raw_debug_terminates_on_piped_stdin() {
-    if !Path::new("/bin/bash").exists() {
-        eprintln!("skip raw_debug_terminates_on_piped_stdin: 无 /bin/bash");
+    let Some(shell) = integration_shell() else {
+        eprintln!("skip raw_debug_terminates_on_piped_stdin: 无 bash/zsh");
         return;
-    }
+    };
     let (exited, output) = run_raw_debug(
+        &shell,
         b"echo perga-raw-debug-regression\n",
         Duration::from_secs(10),
     );
     assert!(exited, "raw-debug 在管道 stdin EOF 后未能自行退出(卡死)");
-    assert!(
-        output.contains("command_end"),
-        "raw-debug 应在退出前 emit command_end"
-    );
+    if command_end_expected(&shell) {
+        assert!(
+            output.contains("command_end"),
+            "raw-debug 应在退出前 emit command_end"
+        );
+    }
 }
 
 #[test]
 fn raw_debug_does_not_kill_slow_silent_command() {
-    if !Path::new("/bin/bash").exists() {
-        eprintln!("skip raw_debug_does_not_kill_slow_silent_command: 无 /bin/bash");
+    let Some(shell) = integration_shell() else {
+        eprintln!("skip raw_debug_does_not_kill_slow_silent_command: 无 bash/zsh");
         return;
-    }
+    };
     // `sleep 6` 期间 shell 长时间无输出,但它没卡死。raw-debug 不能据此误判
     // 并 kill,必须等命令真正跑完。marker 用算术展开 `$((6*7))` 算出,所以
     // "perga42done" 只会出现在命令**输出**里,不会出现在被回显的命令行里。
     let (exited, output) = run_raw_debug(
+        &shell,
         b"sleep 6; echo perga$((6*7))done\n",
         Duration::from_secs(25),
     );
@@ -96,6 +107,26 @@ fn raw_debug_does_not_kill_slow_silent_command() {
         output.contains("perga42done"),
         "raw-debug 误杀了正在跑静默长命令的 shell —— 未等到命令输出"
     );
+}
+
+fn command_end_expected(shell: &Path) -> bool {
+    let name = shell.file_name().and_then(|s| s.to_str());
+    match name {
+        Some("zsh") => true,
+        Some("bash") => bash_supports_ps0(shell),
+        _ => false,
+    }
+}
+
+fn bash_supports_ps0(shell: &Path) -> bool {
+    let Ok(status) = Command::new(shell)
+        .arg("-c")
+        .arg(r#"(( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) ))"#)
+        .status()
+    else {
+        return false;
+    };
+    status.success()
 }
 
 /// 轮询等子进程退出;超时则 kill 掉并返回 false。

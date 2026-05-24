@@ -1,13 +1,13 @@
 //! Host profile 存储:`hosts.toml` 的读取 + 写入 + 翻译。
 //!
-//! **用户**通过前端设置面板的 CRUD UI 增删改 host,**不直接接触文件** ──
+//! **用户**通过客户端设置面板的 CRUD UI 增删改 host,**不直接接触文件** ──
 //! `hosts.toml` 仅是后端的持久化实现细节。写入走原子写(临时文件 + rename),
 //! Unix 上文件权限 0600(只本机当前用户可读,密码不外漏)。
 //!
 //! 不缓存:每次操作都读盘 → 改 → 原子写。文件小,IO 开销忽略;换来「外部
 //! 编辑(虽然不推荐)与 UI 操作不冲突」的简单语义。
 //!
-//! schema(默认 `~/.perga/hosts.toml`,Tauri 打包形态走 `app_data_dir()`):
+//! schema(默认 `~/.perga/hosts.toml`,沙盒客户端可传入 app data 路径):
 //!
 //! ```toml
 //! [[hosts]]
@@ -21,14 +21,14 @@
 //! ```
 //!
 //! `auth` 用 tagged enum:`agent` 走系统 ssh-agent(桌面);`password` 明文
-//! 由前端表单填,适用桌面 + 平板(平板没有 ssh-agent)。后续若加 `key_file`
+//! 由客户端表单填,适用桌面 + 平板(平板没有 ssh-agent)。后续若加 `key_file`
 //! / `keyboard_interactive`,加一个 variant 不破坏现有 schema。
 //!
 //! # 路径注入
 //!
 //! 所有 IO 主接口都接受 `&Path` 参数(`*_at` 系列):perga-server 走
-//! `default_profiles_path()` 解析 `$HOME/.perga/hosts.toml`,perga-tauri 走
-//! `app.path().app_data_dir()`。`load_profiles()` / `create_profile()` 等
+//! `default_profiles_path()` 解析 `$HOME/.perga/hosts.toml`,原生客户端 wrapper 可走
+//! 平台 app data 目录。`load_profiles()` / `create_profile()` 等
 //! 无参 wrapper 是为 dev 桌面侧的简便起见保留,内部仍是调 `*_at`。
 
 use std::path::{Path, PathBuf};
@@ -50,7 +50,7 @@ struct HostsFileOut<'a> {
 }
 
 /// 单条 host 配置。完整字段(**包含 auth 细节**,密码明文);仅本 crate 内
-/// 消费用于翻译成 [`ssh::SshConfig`],不直接对前端暴露的 list 路径泄漏密码。
+/// 消费用于翻译成 [`ssh::SshConfig`],不直接对客户端暴露的 list 路径泄漏密码。
 /// 写回 toml 时也用这个结构。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HostProfile {
@@ -73,8 +73,8 @@ pub enum AuthSpec {
     Password { password: String },
 }
 
-/// 给前端的 list 视图 ── **不**返回密码明文,只返回「使用什么 auth 方式」
-/// 给 UI 选择性显示(比如显示 🔑 / 🔒 图标)。
+/// 给客户端的 list 视图 ── **不**返回密码明文,只返回「使用什么 auth 方式」
+/// 给 UI 选择性显示。
 #[derive(Debug, Clone, Serialize)]
 pub struct HostProfileSummary {
     pub id: String,
@@ -82,7 +82,7 @@ pub struct HostProfileSummary {
     pub host: String,
     pub port: u16,
     pub user: String,
-    /// `"agent"` 或 `"password"`。前端只用来做 icon / label,不携带密码本身。
+    /// `"agent"` 或 `"password"`。客户端只用来做 icon / label,不携带密码本身。
     pub auth_kind: &'static str,
 }
 
@@ -112,8 +112,8 @@ pub fn load_profiles() -> Result<Vec<HostProfile>, ProfileError> {
     load_profiles_from(&path)
 }
 
-/// 从指定路径读 profile —— **主接口**。perga-tauri 走 `app_data_dir()`,
-/// perga-server 走 `default_profiles_path()`,测试走 tempfile。
+/// 从指定路径读 profile —— **主接口**。perga-server 走 `default_profiles_path()`,
+/// 沙盒客户端 wrapper 走平台 app data 目录,测试走 tempfile。
 ///
 /// 文件不存在 → 返回空 Vec(没配 host 是合法状态,不报错)。
 /// 文件存在但解析失败 → 返回 Err,让上层暴露具体原因(toml 行号、字段名)。
@@ -148,7 +148,7 @@ pub fn find_profile(profiles: &[HostProfile], id: &str) -> Option<HostProfile> {
 
 /// Profile → SSH backend 配置的翻译。`crates/ssh` 不知道 profile 概念,
 /// 由 caller 在这里做映射。`known_hosts_path` 由调用方决定:perga-server 传
-/// `None`(让 ssh crate 走 `~/.ssh/known_hosts`),perga-tauri 传
+/// `None`(让 ssh crate 走 `~/.ssh/known_hosts`),沙盒客户端 wrapper 传
 /// `Some(app_data_dir.join("known_hosts"))`。
 pub fn to_ssh_config(profile: &HostProfile, known_hosts_path: Option<PathBuf>) -> ssh::SshConfig {
     let auth = match &profile.auth {
@@ -309,8 +309,8 @@ fn validate_profile(p: &HostProfile) -> Result<(), ProfileError> {
     Ok(())
 }
 
-/// 默认 dev 桌面路径 `$HOME/.perga/hosts.toml`。perga-tauri 打包形态不调,
-/// 走 `app.path().app_data_dir()`。
+/// 默认桌面路径 `$HOME/.perga/hosts.toml`。沙盒客户端 wrapper 可改走平台
+/// app data 目录。
 fn default_profiles_path() -> Result<PathBuf, ProfileError> {
     let home = std::env::var_os("HOME").ok_or_else(|| {
         ProfileError::Io("$HOME not set; cannot locate ~/.perga/hosts.toml".into())

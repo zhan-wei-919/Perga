@@ -10,8 +10,8 @@
 //!     serde_json::to_string(...)   ── wire 序列化
 //! ```
 //!
-//! 不测 transport(那是 `crates/perga-server/tests/rtt.rs`),不测前端
-//! (那是 `web/` 的 perf overlay)。这是定位 server CPU 热点的工具。
+//! 不测 transport(那是 `crates/perga-server/tests/rtt.rs`),不测客户端渲染。
+//! 这是定位 server CPU 热点的工具。
 //!
 //! 用法:
 //!   cargo run --release -p perga-cli --bin perga-bench

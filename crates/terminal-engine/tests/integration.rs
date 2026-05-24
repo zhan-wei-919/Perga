@@ -226,3 +226,19 @@ fn cjk_double_width() {
     // 光标停在第 4 列(2 个宽字符占 0..4)。
     assert_eq!(snap.cursor.col, 4);
 }
+
+#[test]
+fn cjk_utf8_can_arrive_split_by_byte() {
+    let mut e = engine_24x80();
+    for byte in "你好".as_bytes() {
+        e.feed(&[*byte]);
+    }
+    let snap = e.snapshot();
+    let row0 = &snap.rows[0].cells;
+    assert_eq!(row0[0].ch, '你');
+    assert_eq!(row0[0].width, CellWidth::Wide);
+    assert_eq!(row0[1].width, CellWidth::WideSpacer);
+    assert_eq!(row0[2].ch, '好');
+    assert_eq!(row0[2].width, CellWidth::Wide);
+    assert_eq!(row0[3].width, CellWidth::WideSpacer);
+}

@@ -8,8 +8,8 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-# Backend transports + 终端 session 引擎。perga-core 不直接拉 axum / tauri,
-# 由调用方(perga-server / perga-tauri)做协议封装。
+# Backend transports + 终端 session 引擎。perga-core 不直接拉 axum 或平台 UI,
+# 由调用方(perga-server / daemon / native IPC wrapper)做协议封装。
 transport = { path = "../transport" }
 pty = { path = "../pty" }
 ssh = { path = "../ssh" }
