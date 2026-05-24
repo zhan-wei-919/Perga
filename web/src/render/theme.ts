@@ -9,9 +9,24 @@
 
 import type { NamedColor } from "../state/protocol";
 
-export type ThemeId = "dark" | "light" | "rosepine" | "everforest";
+export type ThemeId =
+  | "dark"
+  | "light"
+  | "rosepine"
+  | "everforest"
+  | "gruvbox"
+  | "nord"
+  | "dracula";
 
-export const THEME_IDS: ThemeId[] = ["dark", "rosepine", "everforest", "light"];
+export const THEME_IDS: ThemeId[] = [
+  "dark",
+  "rosepine",
+  "everforest",
+  "gruvbox",
+  "nord",
+  "dracula",
+  "light",
+];
 
 /// chrome CSS 变量名(不含 `--pg-` 前缀)。基础 bg/fg 直接复用
 /// `--term-background` / `--term-foreground`,不在此重复定义。
@@ -257,10 +272,178 @@ const EVERFOREST: ThemeDef = {
   },
 };
 
+// 山隘 —— Gruvbox Dark Medium 风格。
+// 暖深褐底(#282828)+ 米黄前景(#ebdbb2),色相整体偏暖低饱和。accent 用
+// 招牌暖黄 #fabd2f ── 比 dark 的冷蓝、everforest 的 sage 绿对比更强,适合
+// 喜欢「复古终端味儿」的用户。ANSI 沿 Gruvbox 官方 medium contrast 配色。
+const GRUVBOX: ThemeDef = {
+  term: {
+    black: "#282828",
+    red: "#cc241d",
+    green: "#98971a",
+    yellow: "#d79921",
+    blue: "#458588",
+    magenta: "#b16286",
+    cyan: "#689d6a",
+    white: "#a89984",
+    bright_black: "#928374",
+    bright_red: "#fb4934",
+    bright_green: "#b8bb26",
+    bright_yellow: "#fabd2f",
+    bright_blue: "#83a598",
+    bright_magenta: "#d3869b",
+    bright_cyan: "#8ec07c",
+    bright_white: "#ebdbb2",
+    foreground: "#ebdbb2",
+    background: "#282828",
+    cursor: "#ebdbb2",
+    dim_black: "#1d2021",
+    dim_red: "#722e2c",
+    dim_green: "#5b5a1f",
+    dim_yellow: "#7d5a25",
+    dim_blue: "#34555a",
+    dim_magenta: "#6b3f54",
+    dim_cyan: "#3f5e44",
+    dim_white: "#7c6f64",
+    bright_foreground: "#fbf1c7",
+    dim_foreground: "#928374",
+  },
+  chrome: {
+    "fg-dim": "#928374",
+    "tabbar-bg": "#1d2021",
+    "tabbar-border": "#16181a",
+    "tab-active-bg": "#282828",
+    "tab-active-fg": "#ebdbb2",
+    "tab-inactive-bg": "#32302f",
+    "tab-inactive-fg": "#928374",
+    gutter: "#3c3836",
+    accent: "#fabd2f",
+    "exit-fail": "#fb4934",
+    "selection-bg": "rgba(250,189,47,0.26)",
+    "overlay-bg": "#32302f",
+    "overlay-border": "#504945",
+    "overlay-hover": "#3c3836",
+    backdrop: "rgba(20,20,20,0.55)",
+  },
+};
+
+// 北境 —— Nord 风格。
+// 冷蓝灰底(#2e3440 Polar Night 0)+ 雪白前景(#d8dee9 Snow Storm 1),色相
+// 整体往蓝冷漂。accent 用 Frost 2 的冰青 #88c0d0,比 dark 的 Tokyo Night 蓝
+// 更柔、更冷。Aurora 系列做 ANSI 强调色,饱和度比较低,长时间盯屏舒服。
+const NORD: ThemeDef = {
+  term: {
+    black: "#3b4252",
+    red: "#bf616a",
+    green: "#a3be8c",
+    yellow: "#ebcb8b",
+    blue: "#81a1c1",
+    magenta: "#b48ead",
+    cyan: "#88c0d0",
+    white: "#e5e9f0",
+    bright_black: "#4c566a",
+    bright_red: "#d08770",
+    bright_green: "#a3be8c",
+    bright_yellow: "#ebcb8b",
+    bright_blue: "#81a1c1",
+    bright_magenta: "#b48ead",
+    bright_cyan: "#8fbcbb",
+    bright_white: "#eceff4",
+    foreground: "#d8dee9",
+    background: "#2e3440",
+    cursor: "#d8dee9",
+    dim_black: "#272b35",
+    dim_red: "#6c393e",
+    dim_green: "#5d6c50",
+    dim_yellow: "#84724f",
+    dim_blue: "#4a5b6e",
+    dim_magenta: "#665064",
+    dim_cyan: "#4d6e76",
+    dim_white: "#7c8593",
+    bright_foreground: "#eceff4",
+    dim_foreground: "#7b8394",
+  },
+  chrome: {
+    "fg-dim": "#7b8394",
+    "tabbar-bg": "#272b35",
+    "tabbar-border": "#1d2028",
+    "tab-active-bg": "#2e3440",
+    "tab-active-fg": "#d8dee9",
+    "tab-inactive-bg": "#353b48",
+    "tab-inactive-fg": "#7b8394",
+    gutter: "#3b4252",
+    accent: "#88c0d0",
+    "exit-fail": "#bf616a",
+    "selection-bg": "rgba(136,192,208,0.28)",
+    "overlay-bg": "#353b48",
+    "overlay-border": "#434c5e",
+    "overlay-hover": "#3b4252",
+    backdrop: "rgba(20,24,32,0.55)",
+  },
+};
+
+// 德古拉 —— Dracula 官方风格。
+// 深紫黑底(#282a36)+ 雪白前景(#f8f8f2)。色相很饱和但 dark0 压住对比;
+// accent 用招牌紫 #bd93f9,与 cyan(青)、pink(粉)、green(荧光绿)
+// 一起组成 Dracula 标志的「霓虹紫粉绿」配色。适合喜欢高对比鲜艳色的用户。
+const DRACULA: ThemeDef = {
+  term: {
+    black: "#21222c",
+    red: "#ff5555",
+    green: "#50fa7b",
+    yellow: "#f1fa8c",
+    blue: "#bd93f9",
+    magenta: "#ff79c6",
+    cyan: "#8be9fd",
+    white: "#f8f8f2",
+    bright_black: "#6272a4",
+    bright_red: "#ff6e6e",
+    bright_green: "#69ff94",
+    bright_yellow: "#ffffa5",
+    bright_blue: "#d6acff",
+    bright_magenta: "#ff92df",
+    bright_cyan: "#a4ffff",
+    bright_white: "#ffffff",
+    foreground: "#f8f8f2",
+    background: "#282a36",
+    cursor: "#f8f8f2",
+    dim_black: "#15161d",
+    dim_red: "#7d2e2e",
+    dim_green: "#2b7d3f",
+    dim_yellow: "#777d46",
+    dim_blue: "#5d487a",
+    dim_magenta: "#7d3e63",
+    dim_cyan: "#447580",
+    dim_white: "#7c7c77",
+    bright_foreground: "#ffffff",
+    dim_foreground: "#6272a4",
+  },
+  chrome: {
+    "fg-dim": "#6272a4",
+    "tabbar-bg": "#1e1f29",
+    "tabbar-border": "#15161d",
+    "tab-active-bg": "#282a36",
+    "tab-active-fg": "#f8f8f2",
+    "tab-inactive-bg": "#2f3142",
+    "tab-inactive-fg": "#6272a4",
+    gutter: "#44475a",
+    accent: "#bd93f9",
+    "exit-fail": "#ff5555",
+    "selection-bg": "rgba(189,147,249,0.30)",
+    "overlay-bg": "#2f3142",
+    "overlay-border": "#44475a",
+    "overlay-hover": "#363849",
+    backdrop: "rgba(15,15,22,0.55)",
+  },
+};
+
 export const THEMES: Record<ThemeId, ThemeDef> = {
   dark: DARK,
   rosepine: ROSEPINE,
   everforest: EVERFOREST,
+  gruvbox: GRUVBOX,
+  nord: NORD,
+  dracula: DRACULA,
   light: LIGHT,
 };
 

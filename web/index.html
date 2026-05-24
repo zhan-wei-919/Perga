@@ -34,6 +34,16 @@
         background: #1e1e1e;
         color: #d4d4d4;
       }
+      /* 光标闪烁:focused pane 才闪。steps(1) 让 opacity 离散切换,看起来
+         像传统终端的硬切而不是淡入淡出。1.2s 周期(600ms on / 600ms off)
+         比 wezterm 默认 800ms/phase 略快,与本项目 sub-second 反馈节奏匹配。 */
+      @keyframes pg-cursor-blink {
+        0%, 50% { opacity: 1; }
+        50.01%, 100% { opacity: 0; }
+      }
+      .pg-pane-focused .pg-cursor-blink {
+        animation: pg-cursor-blink 1.2s steps(1, end) infinite;
+      }
     </style>
   </head>
   <body>

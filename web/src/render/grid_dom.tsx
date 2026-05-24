@@ -295,7 +295,9 @@ export const GridDom: Component<GridDomProps> = (props) => {
 
   return (
     <div ref={rootRef}>
-      <div ref={cursorRef} style={cursorOverlayStyle()} />
+      {/* class 名让外层 .pg-pane-focused 选中后开启闪烁动画 ── 跨组件
+          解耦:GridDom 不需要知道 pane focused state。 */}
+      <div ref={cursorRef} class="pg-cursor-blink" style={cursorOverlayStyle()} />
     </div>
   );
 };
@@ -760,7 +762,10 @@ function rootStyle(size: GridDomSize, metrics: CellMetrics): Record<string, stri
     lineHeight: `${metrics.cellH}px`,
     whiteSpace: "pre",
     letterSpacing: "0",
-    fontVariantLigatures: "none",
+    // 连字开启:JetBrains Mono / Fira Code 等带 contextual ligatures(=> != ==)
+    // 的字体让代码视觉更连贯。每个 segment 是 cell-aligned 的独立 <span>,
+    // ligature 不会跨 segment;只在 run-grouping 后的同色同字段同段位文本里生效。
+    fontVariantLigatures: "contextual",
     userSelect: "none",
     webkitUserSelect: "none",
     contain: "layout paint style",
@@ -790,6 +795,7 @@ function cursorOverlayStyle(): Record<string, string> {
     overflow: "hidden",
     "white-space": "pre",
     "letter-spacing": "0",
+    // 光标只是单字符背景反色,不需要 ligature ── 也不让它意外吃到邻字成连字。
     "font-variant-ligatures": "none",
   };
 }

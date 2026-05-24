@@ -50,6 +50,9 @@ const THEME_LABELS: Record<ThemeId, string> = {
   dark: "深色",
   rosepine: "玫瑰松",
   everforest: "林海",
+  gruvbox: "山隘",
+  nord: "北境",
+  dracula: "德古拉",
   light: "浅色",
 };
 

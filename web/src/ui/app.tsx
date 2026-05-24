@@ -1,8 +1,9 @@
 // App 顶层组件:workspace root。
 //
-// 装配 = TabBar(顶) + 当前 active tab 的 PaneTreeView(主区) + 一个 capture
-// 阶段的 workspace 快捷键拦截器。每个终端 pane 的 WS / store / renderer / 输入
-// 都下沉到 `PaneLeaf`(经 `PaneTreeView` 递归渲染);App 自己不直接碰 socket。
+// 装配 = TopBar(顶,tabs + 拖拽区 + 窗口控制合一栏) + 当前 active tab 的
+// PaneTreeView(主区) + 一个 capture 阶段的 workspace 快捷键拦截器。
+// 每个终端 pane 的 WS / store / renderer / 输入都下沉到 `PaneLeaf`
+// (经 `PaneTreeView` 递归渲染);App 自己不直接碰 socket。
 //
 // PaneTreeView 用 `<Show keyed>` 按 active tab 对象身份重建:切 tab 整体重挂
 // (后台 tab 的 renderer 卸载、WS 保活),tab 内 split/close 不触发重挂。
@@ -37,13 +38,9 @@ import { Modal } from "./modal";
 import { PaneTreeView } from "./pane_tree_view";
 import { PerfOverlay } from "./perf_overlay";
 import { ProfilePicker } from "./profile_picker";
+import { ResizeHandles } from "./resize_handles";
 import { SettingsPanel } from "./settings_panel";
-import { TabBar } from "./tab_bar";
-import {
-  WINDOW_CHROME_HEIGHT,
-  WindowChrome,
-  shouldShowWindowChrome,
-} from "./window_chrome";
+import { TopBar, shouldShowWindowControls } from "./top_bar";
 
 export const App: Component = () => {
   const perfTracker = new PerfTracker(shouldEnablePerf());
@@ -110,11 +107,7 @@ export const App: Component = () => {
   // 解析窗口内用户点 `+ 新建 shell` / 触发 newTab shortcut 在 mobile build
   // 上意外开出无法 spawn 的 local pane。只有 explicitly desktop 才放行。
   const isLocalAllowed = (): boolean => platform()?.kind === "desktop";
-  const showWindowChrome = (): boolean => shouldShowWindowChrome(platform());
-  const activeTabTitle = (): string => {
-    const tab = workspace.state.tabs[workspace.state.activeTab];
-    return tab ? workspace.tabTitle(tab.id) : "shell";
-  };
+  const showTauriChrome = (): boolean => shouldShowWindowControls(platform());
 
   // `createWorkspace` 数据层永远允许空(关到底就 `tabs: []`)。平台行为差异
   // 在这层用一个 reactive effect 维护:
@@ -140,12 +133,6 @@ export const App: Component = () => {
       workspace.newTab();
     }
   });
-
-  // tab 栏自动隐藏:顶部 8px 是触发区,hover 后展开成 30px 的 tab 区;
-  // 鼠标离开这整个 hover 区就立即收起。不要按 tab 数量常显,否则多 tab
-  // 场景会表现成“移走但不消失”。
-  const [tabHovering, setTabHovering] = createSignal(false);
-  const tabBarVisible = (): boolean => tabHovering();
 
   onMount(() => {
     // 唯一的快捷键拦截器:capture 阶段先于 focused pane 的 bubble 阶段
@@ -174,23 +161,14 @@ export const App: Component = () => {
   return (
     <SettingsContext.Provider value={settings}>
       <div style={rootStyle}>
-        <Show when={showWindowChrome()}>
-          <WindowChrome title={activeTabTitle()} />
-        </Show>
-        <div
-          style={tabHoverZoneStyle(tabBarVisible(), showWindowChrome())}
-          onMouseEnter={() => setTabHovering(true)}
-          onMouseLeave={() => setTabHovering(false)}
-        >
-          <TabBar
-            workspace={workspace}
-            onOpenSettings={() => setSettingsOpen(true)}
-            visible={tabBarVisible()}
-            onPlusOverride={
-              isLocalAllowed() ? undefined : () => setPickerOpen(true)
-            }
-          />
-        </div>
+        <TopBar
+          workspace={workspace}
+          platform={platform()}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onPlusOverride={
+            isLocalAllowed() ? undefined : () => setPickerOpen(true)
+          }
+        />
         <div style={paneAreaStyle}>
           <Show
             when={workspace.state.tabs[workspace.state.activeTab]}
@@ -231,6 +209,11 @@ export const App: Component = () => {
               onCancel={() => setPickerOpen(false)}
             />
           </Modal>
+        </Show>
+        {/* Tauri 自绘窗口无 OS resize 边缘 ── 这里在窗口四周加透明 handle 区,
+            鼠标拖动调用 startResizeDragging。仅 Tauri desktop 渲染。 */}
+        <Show when={showTauriChrome()}>
+          <ResizeHandles />
         </Show>
       </div>
     </SettingsContext.Provider>
@@ -306,7 +289,7 @@ const rootStyle: Record<string, string> = {
   background: "var(--term-background)",
 };
 
-/// pane 区。tab 栏是 hover 浮层,不预留顶部空间 → 显隐不触发 terminal resize。
+/// pane 区。TopBar 是 flex 子节点常占顶部 36px,这里 flex:1 占剩余。
 const paneAreaStyle: Record<string, string> = {
   flex: "1",
   position: "relative",
@@ -315,19 +298,3 @@ const paneAreaStyle: Record<string, string> = {
   "min-height": "0",
   overflow: "hidden",
 };
-
-/// 顶部 hover 区:隐藏时只留 8px 触发条;展开时覆盖完整 tab 栏高度。
-function tabHoverZoneStyle(
-  visible: boolean,
-  hasWindowChrome: boolean,
-): Record<string, string> {
-  return {
-    position: "absolute",
-    top: hasWindowChrome ? `${WINDOW_CHROME_HEIGHT}px` : "0",
-    left: "0",
-    right: "0",
-    height: visible ? "30px" : "8px",
-    "z-index": "110",
-    overflow: "visible",
-  };
-}
