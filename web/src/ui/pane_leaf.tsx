@@ -21,6 +21,10 @@ import {
   copyTextToClipboard,
   isPlainCopyShortcut,
 } from "../input/copy_shortcuts";
+import {
+  compositionCommitMessage,
+  inputCommitMessage,
+} from "../input/composition";
 import { encodeKeyboardEvent } from "../input/keyboard";
 import {
   buildMouseMessage,
@@ -49,6 +53,11 @@ import { cellsForBox, measureCell, type CellMetrics } from "../render/metrics";
 import { useSettings } from "../state/settings_context";
 import type { LeafSession } from "../state/workspace";
 
+/// Pane 四边留白 ── 终端文字与窗口边之间的呼吸量。wezterm 默认 8px,
+/// 这里保持一致。仅作视觉留白,不影响 cellsForBox 的网格计算(那里读
+/// gridHost 的实际 rect,padding 自然反映在 rect 尺寸里)。
+const PANE_PADDING_PX = 8;
+
 export type PaneLeafProps = {
   session: LeafSession;
   /** 是否是 active tab 的 focused leaf。 */
@@ -65,6 +74,7 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
   const settings = useSettings();
   let containerRef: HTMLDivElement | undefined;
   let gridHostRef: HTMLDivElement | undefined;
+  let inputProxyRef: HTMLTextAreaElement | undefined;
 
   // 虚拟历史列表要据滚动位置 / 视口高算可见窗口。
   const [scrollTop, setScrollTop] = createSignal(0);
@@ -96,6 +106,25 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
   const textLeftPx = (): number =>
     session.store.state.modes.alt_screen ? 0 : HISTORY_GUTTER_PX;
 
+  const inputProxyStyle = createMemo(() => {
+    const metrics = cellMetrics();
+    if (!metrics) return hiddenInputProxyStyle(0, 0, 1, 1);
+    const cursor = session.store.state.cursor;
+    const displayRow = session.store.state.modes.alt_screen
+      ? cursor.row
+      : session.store.state.historyLen + cursor.row;
+    // absolute 子元素相对 container 的 padding box;PANE_PADDING_PX 把
+    // proxy 平移到 content area,与块流里的 HistoryView/gridHost 起点对齐。
+    return hiddenInputProxyStyle(
+      PANE_PADDING_PX + textLeftPx() + cursor.col * metrics.cellW,
+      PANE_PADDING_PX + displayRow * metrics.cellH,
+      metrics.cellW,
+      metrics.cellH,
+      metrics.fontFamily,
+      metrics.fontSize,
+    );
+  });
+
   const overlayRects = createMemo(() => {
     const metrics = cellMetrics();
     const current = selection();
@@ -116,6 +145,9 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
 
   // 接受 MouseEvent(PointerEvent / WheelEvent 都继承自它)── wheel 路径
   // 需要复用同一坐标换算。
+  //
+  // box.left/top 是 container 的 border 外沿;PANE_PADDING_PX 让换算回到
+  // content area 起点,与块流里 HistoryView / gridHost 的渲染原点一致。
   const pointForEvent = (
     e: MouseEvent,
     anchor?: SelectionPoint,
@@ -125,8 +157,8 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
     if (!metrics || !el) return null;
     const box = el.getBoundingClientRect();
     return pointFromContentOffset(
-      e.clientX - box.left,
-      e.clientY - box.top + el.scrollTop,
+      e.clientX - box.left - PANE_PADDING_PX,
+      e.clientY - box.top + el.scrollTop - PANE_PADDING_PX,
       {
         rowCount: displayRowCount(),
         cols: session.store.state.size.cols,
@@ -197,10 +229,26 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
     });
   };
 
+  const focusInputProxy = (): void => {
+    const target = inputProxyRef ?? containerRef;
+    // DIAGNOSTIC (IME 调试,定位后删):看真实落到哪个元素。
+    console.log("[ime.focus]", {
+      hasProxyRef: !!inputProxyRef,
+      targetTag: target?.tagName,
+      activeBefore: (document.activeElement as HTMLElement | null)?.tagName,
+    });
+    target?.focus({ preventScroll: true });
+    console.log("[ime.focus] after", {
+      activeAfter: (document.activeElement as HTMLElement | null)?.tagName,
+      activeIsProxy: document.activeElement === inputProxyRef,
+    });
+  };
+
   onMount(() => {
     const el = containerRef;
     const gridHost = gridHostRef;
-    if (!el || !gridHost) {
+    const inputProxy = inputProxyRef;
+    if (!el || !gridHost || !inputProxy) {
       // Solid onMount 契约保证 DOM 已挂载;到这里是 unreachable,fail loud。
       throw new Error("pane leaf refs missing on mount");
     }
@@ -216,8 +264,45 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
     session.connect(rows, cols);
     setViewportH(el.clientHeight);
 
+    let composing = false;
+    let suppressNextInputText: string | null = null;
+    let suppressResetTimer: number | undefined;
+    const clearInputProxy = (): void => {
+      inputProxy.value = "";
+    };
+    const suppressNextInputForComposition = (text: string): void => {
+      suppressNextInputText = text;
+      if (suppressResetTimer !== undefined) {
+        window.clearTimeout(suppressResetTimer);
+      }
+      suppressResetTimer = window.setTimeout(() => {
+        suppressNextInputText = null;
+        suppressResetTimer = undefined;
+      }, 0);
+    };
+
     // 终端输入监听挂在**容器元素**上(不挂 document)。
     const onKeyDown = (e: KeyboardEvent): void => {
+      // DIAGNOSTIC (IME 调试,定位后删):每个 keydown 打出来,看空格 / 拼音键
+      // 时 isComposing / key / target / activeElement / textarea 视口位置长什么样。
+      const proxyRect = inputProxy.getBoundingClientRect();
+      console.log("[ime.keydown]", {
+        key: e.key,
+        code: e.code,
+        keyCode: e.keyCode,
+        isComposing: e.isComposing,
+        composingFlag: composing,
+        targetTag: (e.target as HTMLElement | null)?.tagName,
+        activeTag: (document.activeElement as HTMLElement | null)?.tagName,
+        activeIsProxy: document.activeElement === inputProxy,
+        proxyRect: {
+          top: Math.round(proxyRect.top),
+          left: Math.round(proxyRect.left),
+          width: Math.round(proxyRect.width),
+          height: Math.round(proxyRect.height),
+        },
+        viewport: { w: window.innerWidth, h: window.innerHeight },
+      });
       if (isPlainCopyShortcut(e)) {
         const hasTerminalSelection = selection() !== null;
         if (hasTerminalSelection) {
@@ -245,14 +330,85 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
       session.send({ type: "paste", text });
     };
     let hasDomFocus = false;
-    const onFocus = (): void => {
+    const onFocusIn = (e: FocusEvent): void => {
+      console.log("[ime.focusin]", {
+        targetTag: (e.target as HTMLElement | null)?.tagName,
+        targetIsProxy: e.target === inputProxy,
+        relatedTag: (e.relatedTarget as HTMLElement | null)?.tagName,
+      });
+      if (hasDomFocus) {
+        props.onFocusRequest();
+        return;
+      }
       hasDomFocus = true;
       session.send({ type: "focus", gained: true });
       props.onFocusRequest();
     };
-    const onBlur = (): void => {
+    const onFocusOut = (e: FocusEvent): void => {
+      console.log("[ime.focusout]", {
+        targetTag: (e.target as HTMLElement | null)?.tagName,
+        targetIsProxy: e.target === inputProxy,
+        relatedTag: (e.relatedTarget as HTMLElement | null)?.tagName,
+        relatedInPane: e.relatedTarget instanceof Node && el.contains(e.relatedTarget),
+      });
+      const next = e.relatedTarget;
+      if (next instanceof Node && el.contains(next)) return;
       hasDomFocus = false;
       session.send({ type: "focus", gained: false });
+    };
+    const onCompositionStart = (e: CompositionEvent): void => {
+      console.log("[ime.compositionstart]", {
+        targetTag: (e.target as HTMLElement | null)?.tagName,
+        targetIsProxy: e.target === inputProxy,
+        data: e.data,
+      });
+      if (e.target !== inputProxy) return;
+      composing = true;
+    };
+    const onCompositionEnd = (e: CompositionEvent): void => {
+      console.log("[ime.compositionend]", {
+        targetTag: (e.target as HTMLElement | null)?.tagName,
+        targetIsProxy: e.target === inputProxy,
+        data: e.data,
+        proxyValue: inputProxy.value,
+      });
+      if (e.target !== inputProxy) return;
+      composing = false;
+      const msg = compositionCommitMessage(e.data, inputProxy.value);
+      clearInputProxy();
+      if (!msg) {
+        console.log("[ime.compositionend] dropped: empty commit");
+        return;
+      }
+      console.log("[ime.compositionend] sending paste", msg);
+      session.send(msg);
+      suppressNextInputForComposition(msg.text);
+    };
+    const onInput = (e: Event): void => {
+      const inputEv = e instanceof InputEvent ? e : null;
+      console.log("[ime.input]", {
+        targetTag: (e.target as HTMLElement | null)?.tagName,
+        targetIsProxy: e.target === inputProxy,
+        data: inputEv?.data,
+        inputType: inputEv?.inputType,
+        proxyValue: inputProxy.value,
+        composingFlag: composing,
+      });
+      if (e.target !== inputProxy) return;
+      if (composing) return;
+      const msg = inputCommitMessage(
+        e instanceof InputEvent ? e.data : null,
+        inputProxy.value,
+      );
+      const text = msg?.text ?? "";
+      if (text.length === 0) return;
+      if (suppressNextInputText === text) {
+        suppressNextInputText = null;
+        clearInputProxy();
+        return;
+      }
+      clearInputProxy();
+      if (msg) session.send(msg);
     };
     let selectingPointer: number | null = null;
     let selectionAnchor: SelectionPoint | null = null;
@@ -271,7 +427,7 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
 
     const onPointerDown = (e: PointerEvent): void => {
       props.onFocusRequest();
-      el.focus();
+      focusInputProxy();
       const button = pointerButton(e.button);
       if (button === null) return;
       const point = pointForEvent(e);
@@ -462,8 +618,11 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
 
     el.addEventListener("keydown", onKeyDown);
     el.addEventListener("paste", onPaste);
-    el.addEventListener("focus", onFocus);
-    el.addEventListener("blur", onBlur);
+    el.addEventListener("focusin", onFocusIn);
+    el.addEventListener("focusout", onFocusOut);
+    el.addEventListener("compositionstart", onCompositionStart);
+    el.addEventListener("compositionend", onCompositionEnd);
+    el.addEventListener("input", onInput);
     el.addEventListener("pointerdown", onPointerDown);
     el.addEventListener("pointermove", onPointerMove);
     el.addEventListener("pointerup", finishPointerSelection);
@@ -479,8 +638,11 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
       if (scrollSyncRaf !== undefined) cancelAnimationFrame(scrollSyncRaf);
       el.removeEventListener("keydown", onKeyDown);
       el.removeEventListener("paste", onPaste);
-      el.removeEventListener("focus", onFocus);
-      el.removeEventListener("blur", onBlur);
+      el.removeEventListener("focusin", onFocusIn);
+      el.removeEventListener("focusout", onFocusOut);
+      el.removeEventListener("compositionstart", onCompositionStart);
+      el.removeEventListener("compositionend", onCompositionEnd);
+      el.removeEventListener("input", onInput);
       el.removeEventListener("pointerdown", onPointerDown);
       el.removeEventListener("pointermove", onPointerMove);
       el.removeEventListener("pointerup", finishPointerSelection);
@@ -489,6 +651,9 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
       el.removeEventListener("contextmenu", onContextMenu);
       el.removeEventListener("auxclick", onAuxClick);
       el.removeEventListener("scroll", onScroll);
+      if (suppressResetTimer !== undefined) {
+        window.clearTimeout(suppressResetTimer);
+      }
       // 卸载时仍持有焦点就显式补发 focus lost,否则后台 PTY 一直以为自己 focused。
       if (hasDomFocus) session.send({ type: "focus", gained: false });
       // 不关 socket ── workspace 拥有 session 的 disposal。
@@ -527,9 +692,9 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
     if (
       props.focused &&
       containerRef &&
-      document.activeElement !== containerRef
+      document.activeElement !== inputProxyRef
     ) {
-      containerRef.focus();
+      focusInputProxy();
     }
   });
 
@@ -556,7 +721,27 @@ export const PaneLeaf: Component<PaneLeafProps> = (props) => {
   });
 
   return (
-    <div ref={containerRef} tabindex={0} style={containerStyle(props.focused)}>
+    <div
+      ref={containerRef}
+      tabindex={0}
+      // focused 状态走 class 名:GridDom 内的 .pg-cursor-blink 通过后代选择器
+      // 决定要不要跑闪烁动画;这样 GridDom 不需要 props.focused 注入。
+      classList={{ "pg-pane-focused": props.focused }}
+      style={containerStyle(props.focused)}
+    >
+      {/* tabindex=0(默认):WebKitGTK 的 IM 模块对 tabindex=-1 的 editable
+          元素不激活 commit 通道(只让 fcitx5 弹候选,但 commit-string 不回传)。
+          textarea 必须在正常 tab 流里才被认作 active IME target。 */}
+      <textarea
+        ref={inputProxyRef}
+        aria-label="Terminal input"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck={false}
+        rows={1}
+        style={inputProxyStyle()}
+      />
       {/* 会话开始前就失败了(SSH connect / auth / profile 不存在)── 显示错误
           banner,grid / 历史照常但都是空的,用户能清晰看到原因。 */}
       <Show when={session.store.state.sessionError}>
@@ -630,10 +815,12 @@ const bannerBodyStyle: Record<string, string> = {
 
 const selectionOverlayStyle: Record<string, string> = {
   position: "absolute",
-  left: "0",
-  top: "0",
-  right: "0",
-  bottom: "0",
+  // 与 container 的 padding 对齐 ── 选区矩形坐标系起点和块流子节点的
+  // 渲染原点一致(content area 起点),overlay 区域同样从 padding 内边开始。
+  left: `${PANE_PADDING_PX}px`,
+  top: `${PANE_PADDING_PX}px`,
+  right: `${PANE_PADDING_PX}px`,
+  bottom: `${PANE_PADDING_PX}px`,
   "pointer-events": "none",
   "z-index": "2",
 };
@@ -648,6 +835,45 @@ function selectionRectStyle(
     width: `${rect.width}px`,
     height: `${rect.height}px`,
     background: "var(--pg-selection-bg)",
+  };
+}
+
+/// Hidden textarea used as the real browser text input target.
+///
+/// 视觉不可见靠 transparent color / bg / caret,**不**靠 opacity:0 或
+/// pointer-events:none ── WebKitGTK 2.42+ 对 opacity<≈0.1 或
+/// pointer-events:none 的 editable element 不激活 IM commit 通道
+/// (fcitx5 候选框仍会显示,但 commit-string 不回传)。透明色 + 正常
+/// opacity + auto pointer events 是让 WebKit / fcitx5 IM 链路完整工作的
+/// 最小条件。
+function hiddenInputProxyStyle(
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+  fontFamily: string = "monospace",
+  fontSize: number = 14,
+): Record<string, string> {
+  return {
+    position: "absolute",
+    left: `${left}px`,
+    top: `${top}px`,
+    width: `${Math.max(1, width)}px`,
+    height: `${Math.max(1, height)}px`,
+    padding: "0",
+    border: "0",
+    margin: "0",
+    outline: "none",
+    resize: "none",
+    overflow: "hidden",
+    background: "transparent",
+    color: "transparent",
+    "caret-color": "transparent",
+    "font-family": fontFamily,
+    "font-size": `${fontSize}px`,
+    "line-height": `${height}px`,
+    "white-space": "pre",
+    "z-index": "3",
   };
 }
 
@@ -675,6 +901,8 @@ function containerStyle(focused: boolean): Record<string, string> {
     outline: "none",
     "user-select": "none",
     "-webkit-user-select": "none",
+    padding: `${PANE_PADDING_PX}px`,
+    "box-sizing": "border-box",
     opacity: focused ? "1" : "0.6",
     transition: "opacity 0.12s ease",
   };
